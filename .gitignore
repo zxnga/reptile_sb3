@@ -1,0 +1,7 @@
+*.ipynb
+*.pyc
+
+__pycache__
+.venv/
+cl_utils/
+old/
