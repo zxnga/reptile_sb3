@@ -9,14 +9,14 @@ class SineNet(nn.Module):
     """
     [1, 64, 64, 1] MLP as used in the Reptile paper.
     """
-    def __init__(self):
+    def __init__(self, hidden_dim: int = 64):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(1, 64),
+            nn.Linear(1, hidden_dim),
             nn.ReLU(),
-            nn.Linear(64, 64),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(64, 1),
+            nn.Linear(hidden_dim, 1),
         )
 
     def forward(self, x):
@@ -26,12 +26,7 @@ class SineNet(nn.Module):
 class SupervisedAlgo:
     """
     wrapper for supervised sine regression so that it
-    plugs directly into ReptileAgent.
-
-    Required by ReptileAgent:
-        - __init__(env, policy, **kwargs)
-        - .policy attribute
-        - .learn(total_timesteps, **inner_loop_params)
+    can use directly into ReptileMetaRL.
     """
 
     def __init__(self, env, policy: str = "SineNet", **kwargs: Any):

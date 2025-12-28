@@ -3,5 +3,6 @@
 
 __pycache__
 .venv/
+.venv311/
 cl_utils/
 old/

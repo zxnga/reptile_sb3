@@ -1,9 +1,9 @@
-from typing import Any, List
+from typing import Any, List, Type, Optional
 
 import torch as th
 from torch.optim import Optimizer
 
-from .base_meta_rl import BaseMetaAlgorithm
+from .base_meta_class import BaseMetaAlgorithm
 
 
 class ReptileMetaRL(BaseMetaAlgorithm):

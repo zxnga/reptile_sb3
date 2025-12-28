@@ -8,14 +8,15 @@ import torch as th
 from stable_baselines3.common.type_aliases import GymEnv
 from stable_baselines3.common.vec_env import VecEnv
 from stable_baselines3.common.policies import BasePolicy
+from stable_baselines3.common.utils import get_device
 
-from src.old.task_generator import TaskGenerator
-from src.old.utils import load_weights_from_source, compute_updates
+from .task_generator import TaskGenerator
+from .utils import load_weights_from_source, compute_updates
 
 
 class BaseMetaAlgorithm(ABC):
     """
-    Generic meta-RL base class that *uses* SB3 algorithms internally.
+    Generic meta-RL base class that uses SB3 algo in the inner loop.
 
     It mirrors some of the SB3 BaseAlgorithm API:
       - .learn()   -> meta-training loop (outer loop)
@@ -37,7 +38,7 @@ class BaseMetaAlgorithm(ABC):
         outer_steps: int,
         task_batch_size: int = 1,
         inner_loop_params: Optional[Dict[str, Any]] = None,
-        save_frequency: int = 1,
+        # save_frequency: int = 1,
         verbose: int = 0,
         device: th.device | str = "auto",
         tensorboard_logs: Optional[str] = './inner_loop_logs',
@@ -65,27 +66,27 @@ class BaseMetaAlgorithm(ABC):
         self.task_batch_size = task_batch_size
         
         self.verbose = verbose
-        self.save_frequency = save_frequency
-        self.tensorboard_log = tensorboard_log
+        # self.save_frequency = save_frequency
+        self.tensorboard_logs = tensorboard_logs
 
         first_env, _, _ = self.task_generator.get_task(0)
         self.meta_algo = self.instantiate_model(first_env)
         self.task_generator.reset_history()
         self.meta_policy = self.meta_algo.policy
 
-        self.updates_per_rollout, self.total_updates, self.n_rollouts = compute_updates(
-            self.meta_algo, inner_steps
-        )
-        if verbose >=0 :
-            # TODO chek and modify for off policy
-            print(
-                f"[BaseMetaRL] Gradient updates per inner loop: {self.total_updates:_} "
-                f"({self.updates_per_rollout:_} per rollout * {self.n_rollouts:_} rollouts)"
-            )
-            print(
-                f"[BaseMetaRL] Total env timesteps across outer loop: "
-                f"{self.outer_steps * self.inner_steps:_}"
-            )
+        # self.updates_per_rollout, self.total_updates, self.n_rollouts = compute_updates(
+        #     self.meta_algo, inner_steps
+        # )
+        # if verbose >=0 :
+        #     # TODO chek and modify for off policy
+        #     print(
+        #         f"[BaseMetaRL] Gradient updates per inner loop: {self.total_updates:_} "
+        #         f"({self.updates_per_rollout:_} per rollout * {self.n_rollouts:_} rollouts)"
+        #     )
+        #     print(
+        #         f"[BaseMetaRL] Total env timesteps across outer loop: "
+        #         f"{self.outer_steps * self.inner_steps:_}"
+        #     )
 
     def instantiate_task_generator(self) -> TaskGenerator:
         return self.tasks_generator_cls(**self.tasks_generator_params)
