@@ -6,3 +6,5 @@ __pycache__
 .venv311/
 cl_utils/
 old/
+
+src/fomaml.py

@@ -116,6 +116,34 @@ class BaseMetaAlgorithm(ABC):
         algo_kwargs = {k: v for k, v in self.rl_algo_kwargs.items() if k != "policy"}
         return self.rl_algorithm(env=env, policy=policy, **algo_kwargs)
 
+    def _get_ignored_params(self, prefixes: List[str]) -> set[str]:
+        """
+        Map parameter-name prefixes to full parameter names and validate matches.
+        """
+        if not prefixes:
+            return set()
+
+        all_param_names = [name for name, _ in self.policy.named_parameters()]
+        ignored = {
+            name
+            for name in all_param_names
+            if any(name.startswith(prefix) for prefix in prefixes)
+        }
+
+        unmatched_prefixes = [
+            prefix
+            for prefix in prefixes
+            if not any(name.startswith(prefix) for name in all_param_names)
+        ]
+        if unmatched_prefixes:
+            raise ValueError(
+                f"Some ignored_layers prefixes did not match any parameters: "
+                f"{unmatched_prefixes}\n"
+                f"Available parameters include e.g.: {all_param_names[:10]}..."
+            )
+
+        return ignored
+
     def copy_meta_to_task(self, task_model):
         """
         Default: copy the meta_policy weights into the task model's policy.

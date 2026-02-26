@@ -37,7 +37,7 @@ class ReptileMetaRL(BaseMetaAlgorithm):
         self.ignored_layer_prefixes = ignored_layers or []
 
         self.ignored_params = self._get_ignored_params(self.ignored_layer_prefixes)
-        if self.ignored_params and verbose >= 1:
+        if self.ignored_params and self.verbose >= 1:
             print(f"[Reptile] Ignoring {len(self.ignored_params)} parameters in meta-update:")
             for name in sorted(self.ignored_params):
                 print(f"  - {name}")
@@ -49,38 +49,6 @@ class ReptileMetaRL(BaseMetaAlgorithm):
             )
         else:
             self.meta_optimizer = None
-
-    def _get_ignored_params(self, prefixes: List[str]) -> set[str]:
-        """
-        Map layer-name prefixes to full parameter names (ex. mlp_extractor.shared_net 
-        or value_net)
-        Raises ValueError if any prefix matches nothing.
-        """
-        if not prefixes:
-            return set()
-
-        all_param_names = [name for name, _ in self.policy.named_parameters()]
-
-        ignored = {
-            name
-            for name in all_param_names
-            if any(name.startswith(prefix) for prefix in prefixes)
-        }
-
-        unmatched_prefixes = [
-            prefix
-            for prefix in prefixes
-            if not any(name.startswith(prefix) for name in all_param_names)
-        ]
-
-        if unmatched_prefixes:
-            raise ValueError(
-                f"Some ignored_layers prefixes did not match any parameters: "
-                f"{unmatched_prefixes}\n"
-                f"Available parameters include e.g.: {all_param_names[:10]}..."
-            )
-
-        return ignored
 
     def meta_update(self, task_models: List[Any]) -> None:
         """
