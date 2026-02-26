@@ -54,6 +54,16 @@ This codebase targets first-order meta-learning behavior:
     - `supervised_algo.py`
     - `run_sine_reptile.py`
 
+### Requirements
+
+Tested using Python3.11 with:
+```python
+gymnasium==1.2.3
+stable_baselines3==2.7.1
+torch==2.9.1
+```
+
+
 ## How to extend to your own SB3 setup
 
 - Instanciate a task generator that returns task environments. Tasks are sampled/created inside the task generator following two methods:
@@ -145,3 +155,6 @@ python -m src.reproducibility.run_sine_reptile
 ```
 
 ![](src/reproducibility/figures/figure1_like_reptile.png)
+
+
+
