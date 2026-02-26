@@ -54,14 +54,6 @@ This codebase targets first-order meta-learning behavior:
     - `supervised_algo.py`
     - `run_sine_reptile.py`
 
-## Quick start
-
-Fast run on supervised task:
-
-```powershell
-python -m src.reproducibility.run_sine_reptile --outer-steps 5 --task-batch-size 2 --inner-steps 2 --n-eval-tasks 5 --n-adapt-steps 5 --no-plot --verbose 0
-```
-
 ## How to extend to your own SB3 setup
 
 - Instanciate a task generator that returns task environments. Tasks are sampled/created inside the task generator following two methods:
@@ -142,3 +134,14 @@ class SimpleCartPoleTaskGenerator:
 
 1. Use `BaseMetaAlgorithm` as the parent class.
 2. Implement `meta_update(task_models)` in a child class.
+
+
+## Results validation
+
+Fast run on supervised task:
+
+```powershell
+python -m src.reproducibility.run_sine_reptile
+```
+
+![](src\reproducibility\figures\figure1_like_reptile.png)
