@@ -138,10 +138,10 @@ class SimpleCartPoleTaskGenerator:
 
 ## Results validation
 
-Fast run on supervised task:
+Fast run on supervised task following the experiment in the original ["On First-Order Meta-Learning Algorithms"](https://arxiv.org/pdf/1803.02999):
 
 ```powershell
 python -m src.reproducibility.run_sine_reptile
 ```
 
-![](src\reproducibility\figures\figure1_like_reptile.png)
+![](src/reproducibility/figures/figure1_like_reptile.png)
