@@ -23,6 +23,12 @@ This project adds the outer meta-loop:
 
 This gives you a reusable meta-optimization layer while keeping SB3-compatible policies/algorithms underneath.
 
+## First-order MAML perspective
+
+This codebase targets first-order meta-learning behavior:
+- Reptile is implemented and is first-order.
+- The architecture is intentionally wrapper-based so other first-order MAML-like updates can be added as new subclasses of `BaseMetaAlgorithm`.
+
 ## Main modules
 
 - `src/base_meta_class.py`
@@ -62,11 +68,11 @@ python -m src.reproducibility.run_sine_reptile --outer-steps 5 --task-batch-size
   - `tasks: Optional[ListTask]`: Contruct all your training envs beforehand and feed them as a list to the `TaskGenerator` through the `tasks` parameter.
   - `task_callable: Optional[Callable[..., Tuple[gym.Env, Dict[str, Any]]]]`: Construct a function that generates training envs and pass the callable to the `tasks_generator_cls` param and optional associated parameters to the `tasks_generator_params` param.
 - Pass your SB3 algorithm class as `rl_algorithm` and hyperparameters in `rl_algo_kwargs` to the `ReptileMetaRL` object.
+- Learn the meta-initialization using the `.learn()` method.
 
+### How to create your own task generator
 
-The TaskGenerator class is provided to facilitate the creation and sampling of task especially for complex environments that need specific initialization logic.
-
-However the meta-learning code only expects the task_generator to implement 2 methods:
+The `TaskGenerator` class is provided to facilitate the creation, sampling and revisit of task especially for complex environments that need specific initialization logic. One can create its own task generator as long as it implements the 2 necessary methods called during the meta-learning process:
 - get_tasks: that generates or retreive a env 
 
 ```python
@@ -93,9 +99,8 @@ def reset_history(self) -> None:
         """Reset TaskGenerator."""
 ```
 
-### How to create your own task generator
 
-As the `TaskGenerator` object is maily provided for complex environment setups, we provide an example of how to create a minimal task generator by extending an existing gymnasium environment.
+ We provide an example of how to create a minimal task generator by extending an existing gymnasium environment.
 
 
 ```python
@@ -123,9 +128,11 @@ class SimpleCartPoleTaskGenerator:
         meta_step: int,
         seed: Optional[int] = None,
     ) -> Tuple[gym.Env, Dict[str, Any], Optional[int]]:
+
         env = gym.make(self.env_id)
         info: Dict[str, Any] = {"meta_step": meta_step}
         origin_meta_step: Optional[int] = meta_step
+
         return env, info, origin_meta_step
 
 ```
@@ -135,10 +142,3 @@ class SimpleCartPoleTaskGenerator:
 
 1. Use `BaseMetaAlgorithm` as the parent class.
 2. Implement `meta_update(task_models)` in a child class.
-3. use the `.learn()` method.
-
-## First-order MAML perspective
-
-This codebase targets first-order meta-learning behavior:
-- Reptile is implemented and is first-order.
-- The architecture is intentionally wrapper-based so other first-order MAML-like updates can be added as new subclasses of `BaseMetaAlgorithm`.
