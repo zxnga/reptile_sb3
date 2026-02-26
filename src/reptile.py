@@ -37,7 +37,7 @@ class ReptileMetaRL(BaseMetaAlgorithm):
         self.ignored_layer_prefixes = ignored_layers or []
 
         self.ignored_params = self._get_ignored_params(self.ignored_layer_prefixes)
-        if self.ignored_params and vervose >= 1:
+        if self.ignored_params and verbose >= 1:
             print(f"[Reptile] Ignoring {len(self.ignored_params)} parameters in meta-update:")
             for name in sorted(self.ignored_params):
                 print(f"  - {name}")

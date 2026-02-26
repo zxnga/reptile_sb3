@@ -1,9 +1,21 @@
-from typing import Union, Dict, List, Tuple
+from typing import Union, Dict, List, Tuple, Any
+from enum import Enum
 
 import math
 import os
+import warnings
 import torch
 from torch.nn import Module
+
+try:
+    from stable_baselines3.common.type_aliases import TrainFreq, TrainFrequencyUnit
+    from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
+    from stable_baselines3.common.off_policy_algorithm import OffPolicyAlgorithm
+except Exception:
+    TrainFreq = None  # type: ignore[assignment]
+    TrainFrequencyUnit = None  # type: ignore[assignment]
+    OnPolicyAlgorithm = None  # type: ignore[assignment]
+    OffPolicyAlgorithm = None  # type: ignore[assignment]
 
 def load_weights_from_source(
     source: Union[Module, Dict[str, torch.Tensor]],
@@ -54,28 +66,127 @@ def load_weights_from_source(
 
 
 
-def compute_updates(model, inner_steps: int) -> Tuple[int, int, int]:
+def _is_on_policy(model: Any) -> bool:
+    return OnPolicyAlgorithm is not None and isinstance(model, OnPolicyAlgorithm)
+
+
+def _is_off_policy(model: Any) -> bool:
+    return OffPolicyAlgorithm is not None and isinstance(model, OffPolicyAlgorithm)
+
+
+def _unit_to_str(unit: Any) -> str:
+    if isinstance(unit, str):
+        return unit.lower()
+    if isinstance(unit, Enum):
+        return str(unit.value).lower()
+    return str(unit).lower()
+
+
+def _normalize_train_freq(train_freq: Any):
+    if TrainFreq is not None and isinstance(train_freq, TrainFreq):
+        return train_freq
+
+    if isinstance(train_freq, tuple):
+        if len(train_freq) != 2:
+            raise ValueError(f"`train_freq` tuple must be length 2, got {train_freq}.")
+        frequency, unit = train_freq
+    else:
+        frequency, unit = train_freq, "step"
+
+    if not isinstance(frequency, int):
+        raise ValueError(f"`train_freq` frequency must be int, got {type(frequency).__name__}.")
+
+    unit_str = _unit_to_str(unit)
+    if unit_str not in ("step", "episode"):
+        raise ValueError(f"`train_freq` unit must be 'step' or 'episode', got {unit}.")
+
+    if TrainFreq is not None and TrainFrequencyUnit is not None:
+        normalized_unit = TrainFrequencyUnit.STEP if unit_str == "step" else TrainFrequencyUnit.EPISODE
+        return TrainFreq(frequency=frequency, unit=normalized_unit)
+
+    return frequency, unit_str
+
+
+def _on_policy_counts(model: Any, inner_steps: int) -> Tuple[int, int, int]:
+    n_envs = model.env.num_envs
+    rollout_env_steps = model.n_steps * n_envs
+    n_rollouts = math.ceil(inner_steps / rollout_env_steps)
+
+    if hasattr(model, "n_epochs"):
+        n_epochs = model.n_epochs
+        batch_size = model.batch_size
+        n_minibatches = math.ceil(rollout_env_steps / batch_size)
+        updates_per_rollout = n_epochs * n_minibatches
+    else:
+        updates_per_rollout = 1
+
+    total_updates = updates_per_rollout * n_rollouts
+    return updates_per_rollout, total_updates, n_rollouts
+
+
+def _off_policy_counts(model: Any, inner_steps: int, strict: bool = False, warn: bool = True) -> Tuple[int, int, int]:
+    n_envs = model.env.num_envs
+    train_freq = _normalize_train_freq(model.train_freq)
+
+    if TrainFreq is not None and isinstance(train_freq, TrainFreq):
+        frequency = train_freq.frequency
+        unit_str = _unit_to_str(train_freq.unit)
+    else:
+        frequency, unit_str = train_freq
+
+    if unit_str == "episode":
+        msg = (
+            "Off-policy exact update count with train_freq unit='episode' is not deterministic "
+            "because it depends on stochastic episode lengths. "
+            "Use step-based train_freq, e.g. train_freq=(k, 'step')."
+        )
+        if strict:
+            raise ValueError(msg)
+        if warn:
+            warnings.warn(msg, RuntimeWarning)
+        return 0, 0, 0
+
+    rollout_env_steps = frequency * n_envs
+    n_rollouts = math.ceil(inner_steps / rollout_env_steps)
+
+    learning_starts = getattr(model, "learning_starts", 0)
+    skipped_rollouts = learning_starts // rollout_env_steps
+    train_rollouts = max(0, n_rollouts - skipped_rollouts)
+
+    gradient_steps = getattr(model, "gradient_steps", 1)
+    if gradient_steps >= 0:
+        updates_per_rollout = gradient_steps
+    else:
+        # SB3 uses rollout.episode_timesteps when gradient_steps=-1,
+        # which corresponds to collected environment timesteps.
+        updates_per_rollout = rollout_env_steps
+
+    total_updates = train_rollouts * updates_per_rollout
+    return updates_per_rollout, total_updates, n_rollouts
+
+
+def compute_updates(model, inner_steps: int, strict: bool = True, warn: bool = True) -> Tuple[int, int, int]:
     """
     Params:
-      model: instanciated SB3 model
-      inner_steps: Reptile inner loop steps
+      model: instantiated SB3 model
+      inner_steps: Reptile inner loop steps (SB3 total_timesteps)
+      strict: raise for unsupported exact cases (off-policy episodic train_freq)
+      warn: emit warnings for approximate/unsupported branches if strict=False
     Returns:
       updates_per_rollout: number of gradient updates SB3 does per rollout
       total_updates:      number of gradient updates over `inner_steps` env steps
       n_rollouts: number of rollouts over inner_steps
-
-      #TODO: modify for off_policy updates as well
     """
-    n_steps    = model.n_steps
-    n_envs     = model.env.num_envs   # VecEnv always has this attribute
-    batch_size = model.batch_size
-    n_epochs = getattr(model, "n_epochs", 1)
+    if inner_steps <= 0:
+        raise ValueError(f"`inner_steps` must be > 0, got {inner_steps}.")
 
-    # only full mini-batches are used per epoch
-    updates_per_rollout = (n_steps * n_envs) // batch_size * n_epochs
+    if _is_on_policy(model):
+        return _on_policy_counts(model, inner_steps)
 
-    # how many rollouts to reach `inner_steps` 
-    n_rollouts = math.ceil(inner_steps / n_steps)
+    if _is_off_policy(model):
+        return _off_policy_counts(model, inner_steps, strict=strict, warn=warn)
 
-    total_updates = updates_per_rollout * n_rollouts
-    return updates_per_rollout, total_updates, n_rollouts
+    raise ValueError(
+        "Unsupported model type for compute_updates(). "
+        "Expected an SB3 on-policy or off-policy algorithm instance."
+    )

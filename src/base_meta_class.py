@@ -32,7 +32,7 @@ class BaseMetaAlgorithm(ABC):
         self,
         tasks_generator_cls: Type[TaskGenerator],
         tasks_generator_params: Dict[str, Any],
-        rl_algorithm: Union[th.nn.Module], # SB3 algo class, e.g. PPO/A2C
+        rl_algorithm: th.nn.Module, # SB3 algo class, e.g. PPO/A2C
         rl_algo_kwargs: Dict[str, Any],
         inner_steps: int,
         outer_steps: int,
@@ -74,19 +74,32 @@ class BaseMetaAlgorithm(ABC):
         self.task_generator.reset_history()
         self.meta_policy = self.meta_algo.policy
 
-        # self.updates_per_rollout, self.total_updates, self.n_rollouts = compute_updates(
-        #     self.meta_algo, inner_steps
-        # )
-        # if verbose >=0 :
-        #     # TODO chek and modify for off policy
-        #     print(
-        #         f"[BaseMetaRL] Gradient updates per inner loop: {self.total_updates:_} "
-        #         f"({self.updates_per_rollout:_} per rollout * {self.n_rollouts:_} rollouts)"
-        #     )
-        #     print(
-        #         f"[BaseMetaRL] Total env timesteps across outer loop: "
-        #         f"{self.outer_steps * self.inner_steps:_}"
-        #     )
+        self.updates_per_rollout = None
+        self.total_updates = None
+        self.n_rollouts = None
+
+        try:
+            self.updates_per_rollout, self.total_updates, self.n_rollouts = compute_updates(
+                self.meta_algo, self.inner_steps
+            )
+        except ValueError as exc:
+            if self.verbose >= 1:
+                print(f"[BaseMetaRL] Could not compute update budget exactly: {exc}")
+
+        if self.verbose >= 1:
+            if self.total_updates is not None:
+                print(
+                    f"[BaseMetaRL] Gradient updates per inner loop: {self.total_updates:_} "
+                    f"({self.updates_per_rollout:_} per rollout * {self.n_rollouts:_} rollouts)"
+                )
+                print(
+                    f"[BaseMetaRL] Total inner loop gradient updates: {self.outer_steps * self.total_updates:_}"
+                )
+            print(
+                f"[BaseMetaRL] Total env timesteps across outer loop: "
+                f"{self.outer_steps * self.inner_steps:_} "
+                f"({self.inner_steps:_} inner_steps * {self.outer_steps:_} outer_steps)"
+            )
 
     def instantiate_task_generator(self) -> TaskGenerator:
         return self.tasks_generator_cls(**self.tasks_generator_params)
