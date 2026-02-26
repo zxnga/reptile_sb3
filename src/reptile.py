@@ -63,30 +63,38 @@ class ReptileMetaRL(BaseMetaAlgorithm):
         Any parameter whose name is in self.ignored_params is skipped to be able to meta learn
         only a subset of the agent (ex. only value function)
         """
-        original_params = self.meta_policy.state_dict()
+        meta_params = dict(self.meta_policy.named_parameters())
 
         accumulated_deltas = {
             name: th.zeros_like(param, device=param.device)
-            for name, param in original_params.items()
+            for name, param in meta_params.items()
+            if name not in self.ignored_params
         }
-
+        
         batch_size = len(task_models)
+        if batch_size == 0:
+            # TODO: check what to do in that case
+            return
+
         for task_model in task_models:
-            task_params = task_model.policy.state_dict()
-            for name in original_params:
+            task_params = dict(task_model.policy.named_parameters())
+
+            for name, meta_param in meta_params.items():
                 if name in self.ignored_params:
                     continue
-                accumulated_deltas[name] += (task_params[name] - original_params[name]) / batch_size
+                accumulated_deltas[name].add_(
+                    (task_params[name].detach() - meta_param.detach()) / batch_size
+                )
 
         if self.use_meta_optimizer and self.meta_optimizer is not None:
-            self.meta_optimizer.zero_grad()
+            self.meta_optimizer.zero_grad(set_to_none=True)
 
             for name, param in self.policy.named_parameters():
                 if name in self.ignored_params:
                     continue
-                if name in accumulated_deltas:
-                    # -1 * accumulated_deltas = original_params - task_params
-                    param.grad = -(accumulated_deltas[name]).detach()
+                # -1 * accumulated_deltas = original_params - task_params
+                param.grad = -accumulated_deltas[name].detach()
+
             self.meta_optimizer.step()
 
         else:
@@ -94,5 +102,4 @@ class ReptileMetaRL(BaseMetaAlgorithm):
                 for name, param in self.meta_policy.named_parameters():
                     if name in self.ignored_params:
                         continue
-                    if name in accumulated_deltas:
-                        param.add_(self.meta_lr * accumulated_deltas[name])
+                    param.add_(self.meta_lr * accumulated_deltas[name])
