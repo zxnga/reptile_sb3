@@ -9,8 +9,8 @@ import numpy as np
 import torch as th
 
 from src.reptile import ReptileMetaRL
-from src.reproducibility.sine_tasks import SineTaskGenerator, SineTask
-from src.reproducibility.supervised_algo import SupervisedAlgo, SineNet
+from reproducibility.sine_tasks import SineTaskGenerator, SineTask
+from reproducibility.supervised_algo import SupervisedAlgo, SineNet
 
 
 def set_seed(seed: int) -> None:
@@ -209,7 +209,7 @@ def plot_figure(
     inner_beta2: float = 0.999,
     seed: int = 0,
     device: str = "cpu",
-    save_dir: str = "./src/reproducibility/figures",
+    save_dir: str = "./reproducibility/figures",
     file_name: str = "figure1_like_reptile.png",
     show: bool = False,
 ) -> str:
@@ -329,7 +329,7 @@ def run_reptile_sine_experiment(
     n_plot_adapt_steps: int = 32,
     seed: int = 0,
     device: str = "cpu",
-    save_dir: str = "./src/reproducibility/figures",
+    save_dir: str = "./reproducibility/figures",
     file_name: str = "figure1_like_reptile.png",
     verbose: int = 1,
     show: bool = False,
@@ -431,7 +431,7 @@ def parse_args() -> argparse.Namespace:
     # eval / plotting
     parser.add_argument("--n-eval-tasks", type=int, default=100)
     parser.add_argument("--n-plot-adapt-steps", type=int, default=32)
-    parser.add_argument("--save-dir", type=str, default="./src/reproducibility/figures")
+    parser.add_argument("--save-dir", type=str, default="./reproducibility/figures")
     parser.add_argument("--file-name", type=str, default="figure1_like_reptile.png")
     parser.add_argument("--show", action="store_true")
 

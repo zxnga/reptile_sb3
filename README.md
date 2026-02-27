@@ -48,7 +48,7 @@ This codebase targets first-order meta-learning behavior:
   - Weight copy helper.
   - `compute_updates(...)` utility for SB3 on-policy/off-policy update counting.
 
-- `src/reproducibility/*`
+- `reproducibility/*`
   - Sine-wave supervised benchmark used to sanity-check the meta-learning flow based on the original paper:
     - `sine_tasks.py`
     - `supervised_algo.py`
@@ -151,10 +151,9 @@ class SimpleCartPoleTaskGenerator:
 Fast run on supervised task following the experiment in the original ["On First-Order Meta-Learning Algorithms"](https://arxiv.org/pdf/1803.02999):
 
 ```powershell
-python -m src.reproducibility.run_sine_reptile
+python -m reproducibility.run_sine_reptile
 ```
 
-![](src/reproducibility/figures/figure1_like_reptile.png)
-
+![](reproducibility/figures/figure1_like_reptile.png)
 
 
