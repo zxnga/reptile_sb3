@@ -77,10 +77,18 @@ class BaseMetaAlgorithm(ABC):
         self.updates_per_rollout = None
         self.total_updates = None
         self.n_rollouts = None
+        self.total_env_steps_per_outer = self.inner_steps * self.task_batch_size
+        self.total_env_steps_across_outer = self.outer_steps * self.total_env_steps_per_outer
+        self.total_updates_per_outer_all_tasks = None
+        self.total_updates_across_outer_all_tasks = None
 
         try:
             self.updates_per_rollout, self.total_updates, self.n_rollouts = compute_updates(
                 self.meta_algo, self.inner_steps
+            )
+            self.total_updates_per_outer_all_tasks = self.total_updates * self.task_batch_size
+            self.total_updates_across_outer_all_tasks = (
+                self.total_updates_per_outer_all_tasks * self.outer_steps
             )
         except ValueError as exc:
             if self.verbose >= 1:
@@ -89,16 +97,33 @@ class BaseMetaAlgorithm(ABC):
         if self.verbose >= 1:
             if self.total_updates is not None:
                 print(
-                    f"[BaseMetaRL] Gradient updates per inner loop: {self.total_updates:_} "
+                    f"[BaseMetaRL] Gradient updates per inner loop (per task): {self.total_updates:_} "
                     f"({self.updates_per_rollout:_} per rollout * {self.n_rollouts:_} rollouts)"
                 )
                 print(
-                    f"[BaseMetaRL] Total inner loop gradient updates: {self.outer_steps * self.total_updates:_}"
+                    f"[BaseMetaRL] Gradient updates per outer step (all tasks): "
+                    f"{self.total_updates_per_outer_all_tasks:_} "
+                    f"({self.total_updates:_} per task * {self.task_batch_size:_} tasks per batch)"
+                )
+                print(
+                    f"[BaseMetaRL] Total inner loop gradient updates across all outer steps: "
+                    f"{self.total_updates_across_outer_all_tasks:_} "
+                    f"({self.total_updates_per_outer_all_tasks} updates per outer step * {self.outer_steps} outer steps)\n"
                 )
             print(
-                f"[BaseMetaRL] Total env timesteps across outer loop: "
-                f"{self.outer_steps * self.inner_steps:_} "
-                f"({self.inner_steps:_} inner_steps * {self.outer_steps:_} outer_steps)"
+                f"[BaseMetaRL] Env timesteps per outer step (all tasks): "
+                f"{self.total_env_steps_per_outer:_} "
+                f"({self.inner_steps:_} inner_steps * {self.task_batch_size:_} tasks)"
+            )
+            print(
+                f"[BaseMetaRL] Total env timesteps across outer loop (all tasks): "
+                f"{self.total_env_steps_across_outer:_} "
+                f"({self.inner_steps:_} inner_steps * {self.task_batch_size:_} tasks per batch * "
+                f"{self.outer_steps:_} outer_steps)\n"
+            )
+            print(
+                f"[BaseMetaRL] Meta-model updates across outer loop: "
+                f"{self.outer_steps:_} "
             )
 
     def instantiate_task_generator(self) -> TaskGenerator:
