@@ -48,6 +48,7 @@ class BaseMetaAlgorithm(ABC):
         meta_optimizer_kwargs: Optional[Dict[str, Any]] = None,
         task_batch_size: int = 1,
         inner_loop_params: Optional[Dict[str, Any]] = None,
+        ignored_layers: Optional[List[str]] = None,
         # save_frequency: int = 1,
         verbose: int = 0,
         device: th.device | str = "auto",
@@ -74,6 +75,11 @@ class BaseMetaAlgorithm(ABC):
         self.outer_steps = outer_steps
         self.inner_loop_params = inner_loop_params
         self.task_batch_size = task_batch_size
+        self.ignored_layer_prefixes = ignored_layers or []
+        if self.ignored_params and verbose >= 1:
+            print(f"[BaseMetaRL] Ignoring {len(self.ignored_params)} parameters in meta-update:")
+            for name in sorted(self.ignored_params):
+                print(f"  - {name}")
 
         self.use_meta_optimizer = use_meta_optimizer
         self.meta_optimizer_cls = meta_optimizer_cls

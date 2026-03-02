@@ -15,22 +15,9 @@ class ReptileMetaRL(BaseMetaAlgorithm):
     def __init__(
         self,
         *args,
-        ignored_layers: Optional[List[str]] = None,
         **kwargs
     ):
-        """
-        :param ignored_layers:     List of parameter name prefixes to ignore in meta-update.
-                                   These prefixes are matched against policy.named_parameters()
-                                   (e.g. ["mlp_extractor.shared_net", "value_net"]).
-        """
         super().__init__(*args, **kwargs)
-        self.ignored_layer_prefixes = ignored_layers or []
-
-        self.ignored_params = self._get_ignored_params(self.ignored_layer_prefixes)
-        if self.ignored_params and self.verbose >= 1:
-            print(f"[Reptile] Ignoring {len(self.ignored_params)} parameters in meta-update:")
-            for name in sorted(self.ignored_params):
-                print(f"  - {name}")
 
     def meta_update(self, task_models: List[Any], outer_step: int) -> None:
         """
