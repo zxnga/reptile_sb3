@@ -17,8 +17,7 @@ from .utils import load_weights_from_source, compute_updates
 from .utils import LRSchedule, normalize_lr_schedule
 
 #TODO: either here or in child class (reptile, fomaml) filter parameters of the optimizer
-# based on the ignored layers. Maybe don't build optimizer here and wait in child class
-# because for now ignored layers are unkown. or maybe bring ingored layers here
+# based on the ignored layers.
 
 class BaseMetaAlgorithm(ABC):
     """
@@ -57,9 +56,6 @@ class BaseMetaAlgorithm(ABC):
         assert hasattr(rl_algorithm, "learn"), "rl_algorithm must have a .learn() method (SB3)."
         assert task_batch_size > 0, f"task_batch_size must be > 0, got {task_batch_size}"
 
-        if inner_loop_params is None:
-            inner_loop_params = {}
-
         self.device = get_device(device)
         if verbose >= 1:
             print(f"Using {self.device} device")
@@ -67,13 +63,15 @@ class BaseMetaAlgorithm(ABC):
         self.tasks_generator_cls = tasks_generator_cls
         self.tasks_generator_params = tasks_generator_params
         self.task_generator: TaskGenerator = self.instantiate_task_generator()
+        first_env, _, _ = self.task_generator.get_task(0)
+        self.task_generator.reset_history()
 
         self.rl_algorithm = rl_algorithm
         self.rl_algo_kwargs = rl_algo_kwargs
 
         self.inner_steps = inner_steps
         self.outer_steps = outer_steps
-        self.inner_loop_params = inner_loop_params
+        self.inner_loop_params = inner_loop_params if inner_loop_params is not None else {}
         self.task_batch_size = task_batch_size
         self.ignored_layer_prefixes = ignored_layers or []
         if self.ignored_params and verbose >= 1:
@@ -92,11 +90,9 @@ class BaseMetaAlgorithm(ABC):
         
         self.verbose = verbose
         # self.save_frequency = save_frequency
-        self.tensorboard_logs = tensorboard_logs
+        # self.tensorboard_logs = tensorboard_logs
 
-        first_env, _, _ = self.task_generator.get_task(0)
         self.meta_algo = self.instantiate_model(first_env)
-        self.task_generator.reset_history()
         self.meta_policy = self.meta_algo.policy
         self.meta_optimizer = self._build_meta_optimizer()
 
@@ -172,7 +168,7 @@ class BaseMetaAlgorithm(ABC):
         Parameters optimized by the outer-loop optimizer.
         Subclasses can override this to optimize a subset of parameters.
         """
-        return self.policy.parameters()
+        return self.meta_policy.parameters()
 
     def _build_meta_optimizer(self) -> Optional[Optimizer]:
         if not self.use_meta_optimizer:
@@ -193,7 +189,7 @@ class BaseMetaAlgorithm(ABC):
         if not prefixes:
             return set()
 
-        all_param_names = [name for name, _ in self.policy.named_parameters()]
+        all_param_names = [name for name, _ in self.meta_policy.named_parameters()]
         ignored = {
             name
             for name in all_param_names
@@ -353,7 +349,3 @@ class BaseMetaAlgorithm(ABC):
         Save the SB3 meta model using its own .save().
         """
         self.meta_algo.save(path)
-
-    @property
-    def policy(self) -> BasePolicy:
-        return self.meta_algo.policy
