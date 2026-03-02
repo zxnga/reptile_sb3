@@ -1,7 +1,6 @@
-from typing import Any, List, Type, Optional
+from typing import Any, List, Optional
 
 import torch as th
-from torch.optim import Optimizer
 
 from .base_meta_class import BaseMetaAlgorithm
 
@@ -16,24 +15,15 @@ class ReptileMetaRL(BaseMetaAlgorithm):
     def __init__(
         self,
         *args,
-        meta_lr: float,
-        use_meta_optimizer: bool = False,
-        meta_optimizer_cls: Type[Optimizer] = th.optim.Adam,
         ignored_layers: Optional[List[str]] = None,
         **kwargs
     ):
         """
-        :param meta_lr:            Reptile step size epsilon.
-        :param use_meta_optimizer: If True, use an optimizer over meta-parameters
-                                   instead of directly adding meta_lr * delta.
-        :param meta_optimizer_cls: Optimizer class to use in meta mode (default: Adam).
         :param ignored_layers:     List of parameter name prefixes to ignore in meta-update.
                                    These prefixes are matched against policy.named_parameters()
                                    (e.g. ["mlp_extractor.shared_net", "value_net"]).
         """
         super().__init__(*args, **kwargs)
-        self.meta_lr = meta_lr
-        self.use_meta_optimizer = use_meta_optimizer
         self.ignored_layer_prefixes = ignored_layers or []
 
         self.ignored_params = self._get_ignored_params(self.ignored_layer_prefixes)
@@ -42,15 +32,7 @@ class ReptileMetaRL(BaseMetaAlgorithm):
             for name in sorted(self.ignored_params):
                 print(f"  - {name}")
 
-        if use_meta_optimizer:
-            self.meta_optimizer = meta_optimizer_cls(
-                self.policy.parameters(),
-                lr=self.meta_lr,
-            )
-        else:
-            self.meta_optimizer = None
-
-    def meta_update(self, task_models: List[Any]) -> None:
+    def meta_update(self, task_models: List[Any], outer_step: int) -> None:
         """
         Batched Reptile update:
 
@@ -62,7 +44,12 @@ class ReptileMetaRL(BaseMetaAlgorithm):
 
         Any parameter whose name is in self.ignored_params is skipped to be able to meta learn
         only a subset of the agent (ex. only value function)
+
+        Args:
+            task_models: list of SB3 algorithms adapted on each task in the batch.
+            outer_step: current outer loop step, needed to compute lr.
         """
+        meta_lr = self.get_meta_lr(outer_step)
         meta_params = dict(self.meta_policy.named_parameters())
 
         accumulated_deltas = {
@@ -87,6 +74,7 @@ class ReptileMetaRL(BaseMetaAlgorithm):
                 )
 
         if self.use_meta_optimizer and self.meta_optimizer is not None:
+            self.sync_meta_optimizer_lr(self.meta_optimizer, meta_lr)
             self.meta_optimizer.zero_grad(set_to_none=True)
 
             for name, param in self.policy.named_parameters():
@@ -102,4 +90,4 @@ class ReptileMetaRL(BaseMetaAlgorithm):
                 for name, param in self.meta_policy.named_parameters():
                     if name in self.ignored_params:
                         continue
-                    param.add_(self.meta_lr * accumulated_deltas[name])
+                    param.add_(meta_lr * accumulated_deltas[name])

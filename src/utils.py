@@ -1,4 +1,4 @@
-from typing import Union, Dict, List, Tuple, Any
+from typing import Union, Dict, List, Tuple, Any, Callable
 from enum import Enum
 
 import math
@@ -12,10 +12,62 @@ try:
     from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
     from stable_baselines3.common.off_policy_algorithm import OffPolicyAlgorithm
 except Exception:
-    TrainFreq = None  # type: ignore[assignment]
-    TrainFrequencyUnit = None  # type: ignore[assignment]
-    OnPolicyAlgorithm = None  # type: ignore[assignment]
-    OffPolicyAlgorithm = None  # type: ignore[assignment]
+    TrainFreq = None
+    TrainFrequencyUnit = None
+    OnPolicyAlgorithm = None
+    OffPolicyAlgorithm = None
+
+
+LRSchedule = Union[float, Callable[[int, int], float]]
+
+
+class ConstantLRSchedule:
+    """Constant LR schedule."""
+
+    def __init__(self, value: float):
+        if value < 0:
+            raise ValueError(f"`value` must be >= 0, got {value}.")
+        self.value = float(value)
+
+    def __call__(self, step: int, total_steps: int) -> float:
+        return self.value
+
+
+class LinearLRSchedule:
+    """
+    Linear LR schedule from start to end over total_steps.
+
+    If `step` is outside [0, total_steps], output is clamped to [start, end].
+    """
+
+    def __init__(self, start: float, end: float = 0.0):
+        if start < 0 or end < 0:
+            raise ValueError(f"`start` and `end` must be >= 0, got start={start}, end={end}.")
+        self.start = float(start)
+        self.end = float(end)
+
+    def __call__(self, step: int, total_steps: int) -> float:
+        if total_steps <= 0:
+            return self.end
+        clamped_step = min(max(int(step), 0), int(total_steps))
+        progress = clamped_step / float(total_steps)
+        return self.start + (self.end - self.start) * progress
+
+
+def normalize_lr_schedule(lr_or_schedule: LRSchedule) -> Callable[[int, int], float]:
+    """
+    Accept either:
+      - float (constant LR)
+      - callable(step, total_steps) -> lr
+    and return a callable schedule.
+    """
+    if isinstance(lr_or_schedule, (int, float)):
+        return ConstantLRSchedule(float(lr_or_schedule))
+    if callable(lr_or_schedule):
+        return lr_or_schedule
+    raise TypeError(
+        "`lr_or_schedule` must be a float or a callable(step, total_steps) -> float."
+    )
 
 def load_weights_from_source(
     source: Union[Module, Dict[str, torch.Tensor]],

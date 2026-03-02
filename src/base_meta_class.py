@@ -1,9 +1,11 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Type, Optional, Tuple
+from collections.abc import Iterable
 
 import numpy as np
 import torch as th
+from torch.optim import Optimizer
 
 from stable_baselines3.common.type_aliases import GymEnv
 from stable_baselines3.common.vec_env import VecEnv
@@ -12,7 +14,11 @@ from stable_baselines3.common.utils import get_device
 
 from .task_generator import TaskGenerator
 from .utils import load_weights_from_source, compute_updates
+from .utils import LRSchedule, normalize_lr_schedule
 
+#TODO: either here or in child class (reptile, fomaml) filter parameters of the optimizer
+# based on the ignored layers. Maybe don't build optimizer here and wait in child class
+# because for now ignored layers are unkown. or maybe bring ingored layers here
 
 class BaseMetaAlgorithm(ABC):
     """
@@ -36,6 +42,10 @@ class BaseMetaAlgorithm(ABC):
         rl_algo_kwargs: Dict[str, Any],
         inner_steps: int,
         outer_steps: int,
+        meta_lr: LRSchedule,
+        use_meta_optimizer: bool = False,
+        meta_optimizer_cls: Type[Optimizer] = th.optim.Adam,
+        meta_optimizer_kwargs: Optional[Dict[str, Any]] = None,
         task_batch_size: int = 1,
         inner_loop_params: Optional[Dict[str, Any]] = None,
         # save_frequency: int = 1,
@@ -64,6 +74,15 @@ class BaseMetaAlgorithm(ABC):
         self.outer_steps = outer_steps
         self.inner_loop_params = inner_loop_params
         self.task_batch_size = task_batch_size
+
+        self.use_meta_optimizer = use_meta_optimizer
+        self.meta_optimizer_cls = meta_optimizer_cls
+        self.meta_optimizer_kwargs = dict(meta_optimizer_kwargs or {})
+        self.meta_lr_schedule = normalize_lr_schedule(meta_lr)
+        self.meta_lr = self.meta_lr_schedule
+        self.is_constant_meta_lr = isinstance(meta_lr, (int, float))
+        self.current_meta_lr = float(meta_lr) if self.is_constant_meta_lr else None
+        self._last_optimizer_meta_lr: Optional[float] = self.current_meta_lr
         
         self.verbose = verbose
         # self.save_frequency = save_frequency
@@ -73,6 +92,7 @@ class BaseMetaAlgorithm(ABC):
         self.meta_algo = self.instantiate_model(first_env)
         self.task_generator.reset_history()
         self.meta_policy = self.meta_algo.policy
+        self.meta_optimizer = self._build_meta_optimizer()
 
         self.updates_per_rollout = None
         self.total_updates = None
@@ -141,6 +161,25 @@ class BaseMetaAlgorithm(ABC):
         algo_kwargs = {k: v for k, v in self.rl_algo_kwargs.items() if k != "policy"}
         return self.rl_algorithm(env=env, policy=policy, **algo_kwargs)
 
+    def get_meta_optimizer_params(self) -> Iterable[th.nn.Parameter]:
+        """
+        Parameters optimized by the outer-loop optimizer.
+        Subclasses can override this to optimize a subset of parameters.
+        """
+        return self.policy.parameters()
+
+    def _build_meta_optimizer(self) -> Optional[Optimizer]:
+        if not self.use_meta_optimizer:
+            return None
+        lr0 = self.get_meta_lr(0)
+        optimizer = self.meta_optimizer_cls(
+            self.get_meta_optimizer_params(),
+            lr=lr0,
+            **self.meta_optimizer_kwargs,
+        )
+        self._last_optimizer_meta_lr = lr0
+        return optimizer
+
     def _get_ignored_params(self, prefixes: List[str]) -> set[str]:
         """
         Map parameter-name prefixes to full parameter names and validate matches.
@@ -183,12 +222,13 @@ class BaseMetaAlgorithm(ABC):
         task_model.learn(self.inner_steps, **self.inner_loop_params)
 
     @abstractmethod
-    def meta_update(self, task_models: List[Any]) -> None:
+    def meta_update(self, task_models: List[Any], outer_step: int) -> None:
         """
         Algorithm-specific meta-update.
 
         Args:
             task_models: list of SB3 algorithms adapted on each task in the batch.
+            outer_step: current outer loop step, needed to compute lr.
         """
         ...
 
@@ -212,13 +252,18 @@ class BaseMetaAlgorithm(ABC):
         Returns:
             self (so you can write `meta_learner.learn(...).get_meta_policy()`).
         """
-        if outer_steps is None:
-            outer_steps = self.outer_steps
-
+        if outer_steps is not None:
+            if self.verbose >=1:
+                print(
+                    f"[BaseMetaRL] Overriding initial outer_steps ({self.outer_steps}) "
+                    f"with new value: {outer_steps}."
+                )
+            self.outer_steps = outer_steps # add possibility to resume training
+            
         if reset_task_history_before_learning:
             self.task_generator.reset_history()
 
-        for outer in range(outer_steps):
+        for outer in range(self.outer_steps):
             task_models = []
 
             task_batch = [
@@ -233,7 +278,7 @@ class BaseMetaAlgorithm(ABC):
                 self.inner_adapt(task_model)
                 task_models.append(task_model)
 
-            self.meta_update(task_models)
+            self.meta_update(task_models, outer)
 
         return self
 
@@ -253,6 +298,35 @@ class BaseMetaAlgorithm(ABC):
             episode_start=episode_start,
             deterministic=deterministic,
         )
+
+    def get_meta_lr(self, outer_step: int) -> float:
+        total = max(self.outer_steps - 1, 1)  # so final step reaches end LR
+        lr = float(self.meta_lr_schedule(outer_step, total))
+        self.current_meta_lr = lr
+        return lr
+
+    def sync_meta_optimizer_lr(
+        self,
+        meta_optimizer: Optional[Optimizer],
+        meta_lr: float,
+        force: bool = False,
+    ) -> None:
+        """
+        Update optimizer lr only when needed.
+
+        - For constant schedules, updates are skipped after optimizer init.
+        - For dynamic schedules, param-groups are updated only when lr changed.
+        """
+        if meta_optimizer is None:
+            return
+
+        if not force and self.is_constant_meta_lr:
+            return
+
+        if force or self._last_optimizer_meta_lr != meta_lr:
+            for group in meta_optimizer.param_groups:
+                group["lr"] = meta_lr
+            self._last_optimizer_meta_lr = meta_lr
 
     def get_env(self) -> Optional[VecEnv]:
         """
