@@ -1,8 +1,10 @@
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Type
 
 import torch as th
 
 from .base_meta_class import BaseMetaAlgorithm
+from .task_generator import TaskGenerator
+from .utils import LRSchedule
 
 
 class ReptileMetaRL(BaseMetaAlgorithm):
@@ -14,10 +16,43 @@ class ReptileMetaRL(BaseMetaAlgorithm):
 
     def __init__(
         self,
-        *args,
-        **kwargs
+        tasks_generator_cls: Type[TaskGenerator],
+        tasks_generator_params: Dict[str, Any],
+        rl_algorithm: th.nn.Module,
+        rl_algo_kwargs: Dict[str, Any],
+        inner_steps: int,
+        outer_steps: int,
+        meta_lr: LRSchedule,
+        use_meta_optimizer: bool = False,
+        meta_optimizer_cls: Type[th.optim.Optimizer] = th.optim.Adam,
+        meta_optimizer_kwargs: Optional[Dict[str, Any]] = None,
+        task_batch_size: int = 1,
+        inner_loop_params: Optional[Dict[str, Any]] = None,
+        ignored_layers: Optional[List[str]] = None,
+        verbose: int = 0,
+        device: th.device | str = "auto",
+        tensorboard_logs: Optional[str] = "./inner_loop_logs",
+        **kwargs,
     ):
-        super().__init__(*args, **kwargs)
+        super().__init__(
+            tasks_generator_cls=tasks_generator_cls,
+            tasks_generator_params=tasks_generator_params,
+            rl_algorithm=rl_algorithm,
+            rl_algo_kwargs=rl_algo_kwargs,
+            inner_steps=inner_steps,
+            outer_steps=outer_steps,
+            meta_lr=meta_lr,
+            use_meta_optimizer=use_meta_optimizer,
+            meta_optimizer_cls=meta_optimizer_cls,
+            meta_optimizer_kwargs=meta_optimizer_kwargs,
+            task_batch_size=task_batch_size,
+            inner_loop_params=inner_loop_params,
+            ignored_layers=ignored_layers,
+            verbose=verbose,
+            device=device,
+            tensorboard_logs=tensorboard_logs,
+            **kwargs,
+        )
 
     def meta_update(self, task_models: List[Any], outer_step: int) -> None:
         """
