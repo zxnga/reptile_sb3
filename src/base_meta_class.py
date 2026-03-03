@@ -57,16 +57,61 @@ class BaseMetaAlgorithm(ABC):
         assert hasattr(rl_algorithm, "learn"), "rl_algorithm must have a .learn() method (SB3)."
         assert task_batch_size > 0, f"task_batch_size must be > 0, got {task_batch_size}"
 
+        self._init_core_config(
+            tasks_generator_cls=tasks_generator_cls,
+            tasks_generator_params=tasks_generator_params,
+            rl_algorithm=rl_algorithm,
+            rl_algo_kwargs=rl_algo_kwargs,
+            inner_steps=inner_steps,
+            outer_steps=outer_steps,
+            meta_lr=meta_lr,
+            use_meta_optimizer=use_meta_optimizer,
+            meta_optimizer_cls=meta_optimizer_cls,
+            meta_optimizer_kwargs=meta_optimizer_kwargs,
+            task_batch_size=task_batch_size,
+            inner_loop_params=inner_loop_params,
+            ignored_layers=ignored_layers,
+            ignore_optimizer_params=ignore_optimizer_params,
+            verbose=verbose,
+            device=device,
+            tensorboard_logs=tensorboard_logs,
+        )
+
+        first_env = self._init_task_generator_and_bootstrap_env()
+        self._init_meta_model(first_env)
+        self._init_ignored_params()
+        self._init_meta_optimizer()
+        self._init_budget_counters()
+        self._log_startup_summary()
+
+    def _init_core_config(
+        self,
+        *,
+        tasks_generator_cls: Type[TaskGenerator],
+        tasks_generator_params: Dict[str, Any],
+        rl_algorithm: th.nn.Module,
+        rl_algo_kwargs: Dict[str, Any],
+        inner_steps: int,
+        outer_steps: int,
+        meta_lr: LRSchedule,
+        use_meta_optimizer: bool,
+        meta_optimizer_cls: Type[Optimizer],
+        meta_optimizer_kwargs: Optional[Dict[str, Any]],
+        task_batch_size: int,
+        inner_loop_params: Optional[Dict[str, Any]],
+        ignored_layers: Optional[List[str]],
+        ignore_optimizer_params: bool,
+        verbose: int,
+        device: th.device | str,
+        tensorboard_logs: Optional[str],
+    ) -> None:
         self.device = get_device(device)
-        if verbose >= 1:
+        self.verbose = verbose
+        if self.verbose >= 1:
             print(f"Using {self.device} device")
 
         self.tasks_generator_cls = tasks_generator_cls
         self.tasks_generator_params = tasks_generator_params
-        self.task_generator: TaskGenerator = self.instantiate_task_generator()
-        first_env, _, _ = self.task_generator.get_task(0)
-        self.task_generator.reset_history()
-
         self.rl_algorithm = rl_algorithm
         self.rl_algo_kwargs = rl_algo_kwargs
 
@@ -86,27 +131,38 @@ class BaseMetaAlgorithm(ABC):
         self.is_constant_meta_lr = isinstance(meta_lr, (int, float))
         self.current_meta_lr = float(meta_lr) if self.is_constant_meta_lr else None
         self._last_optimizer_meta_lr: Optional[float] = self.current_meta_lr
-        
-        self.verbose = verbose
-        # self.save_frequency = save_frequency
-        # self.tensorboard_logs = tensorboard_logs
 
+        self.tensorboard_logs = tensorboard_logs
+
+    def _init_task_generator_and_bootstrap_env(self) -> GymEnv | VecEnv:
+        self.task_generator = self.instantiate_task_generator()
+        first_env, _, _ = self.task_generator.get_task(0)
+        self.task_generator.reset_history()
+        return first_env
+
+    def _init_meta_model(self, first_env: GymEnv | VecEnv) -> None:
         self.meta_algo = self.instantiate_model(first_env)
         self.meta_policy = self.meta_algo.policy
+
+    def _init_ignored_params(self) -> None:
         self.ignored_params = self._get_ignored_params(self.ignored_layer_prefixes)
-        if self.ignored_params and verbose >= 1:
+        if self.ignored_params and self.verbose >= 1:
             print(f"[BaseMetaRL] Ignoring {len(self.ignored_params)} parameters in meta-update:")
             for name in sorted(self.ignored_params):
                 print(f"  - {name}")
+
+    def _init_meta_optimizer(self) -> None:
         self.meta_optimizer = self._build_meta_optimizer()
 
+    def _init_budget_counters(self) -> None:
         self.updates_per_rollout = None
         self.total_updates = None
         self.n_rollouts = None
-        self.total_env_steps_per_outer = self.inner_steps * self.task_batch_size
-        self.total_env_steps_across_outer = self.outer_steps * self.total_env_steps_per_outer
         self.total_updates_per_outer_all_tasks = None
         self.total_updates_across_outer_all_tasks = None
+
+        self.total_env_steps_per_outer = self.inner_steps * self.task_batch_size
+        self.total_env_steps_across_outer = self.outer_steps * self.total_env_steps_per_outer
 
         try:
             self.updates_per_rollout, self.total_updates, self.n_rollouts = compute_updates(
@@ -120,37 +176,44 @@ class BaseMetaAlgorithm(ABC):
             if self.verbose >= 1:
                 print(f"[BaseMetaRL] Could not compute update budget exactly: {exc}")
 
-        if self.verbose >= 1:
-            if self.total_updates is not None:
-                print(
-                    f"[BaseMetaRL] Gradient updates per inner loop (per task): {self.total_updates:_} "
-                    f"({self.updates_per_rollout:_} per rollout * {self.n_rollouts:_} rollouts)"
-                )
-                print(
-                    f"[BaseMetaRL] Gradient updates per outer step (all tasks): "
-                    f"{self.total_updates_per_outer_all_tasks:_} "
-                    f"({self.total_updates:_} per task * {self.task_batch_size:_} tasks per batch)"
-                )
-                print(
-                    f"[BaseMetaRL] Total inner loop gradient updates across all outer steps: "
-                    f"{self.total_updates_across_outer_all_tasks:_} "
-                    f"({self.total_updates_per_outer_all_tasks} updates per outer step * {self.outer_steps} outer steps)\n"
-                )
+    def _log_startup_summary(self) -> None:
+        if self.verbose < 1:
+            return
+
+        if self.total_updates is not None:
             print(
-                f"[BaseMetaRL] Env timesteps per outer step (all tasks): "
-                f"{self.total_env_steps_per_outer:_} "
-                f"({self.inner_steps:_} inner_steps * {self.task_batch_size:_} tasks)"
+                f"[BaseMetaRL] Maximum theoretical number of steps and gradient updates:"
             )
             print(
-                f"[BaseMetaRL] Total env timesteps across outer loop (all tasks): "
-                f"{self.total_env_steps_across_outer:_} "
-                f"({self.inner_steps:_} inner_steps * {self.task_batch_size:_} tasks per batch * "
-                f"{self.outer_steps:_} outer_steps)\n"
+                f"    - Gradient updates per inner loop (per task): {self.total_updates:_} "
+                f"({self.updates_per_rollout:_} per rollout * {self.n_rollouts:_} rollouts)"
             )
             print(
-                f"[BaseMetaRL] Meta-model updates across outer loop: "
-                f"{self.outer_steps:_} "
+                f"    - Gradient updates per outer step (all tasks): "
+                f"{self.total_updates_per_outer_all_tasks:_} "
+                f"({self.total_updates:_} per task * {self.task_batch_size:_} tasks per batch)"
             )
+            print(
+                f"    - Total inner loop gradient updates across all outer steps: "
+                f"{self.total_updates_across_outer_all_tasks:_} "
+                f"({self.total_updates_per_outer_all_tasks} updates per outer step * {self.outer_steps} outer steps)\n"
+            )
+
+        print(
+            f"    - Env timesteps per outer step (all tasks): "
+            f"{self.total_env_steps_per_outer:_} "
+            f"({self.inner_steps:_} inner_steps * {self.task_batch_size:_} tasks)"
+        )
+        print(
+            f"    - Total env timesteps across outer loop (all tasks): "
+            f"{self.total_env_steps_across_outer:_} "
+            f"({self.inner_steps:_} inner_steps * {self.task_batch_size:_} tasks per batch * "
+            f"{self.outer_steps:_} outer_steps)\n"
+        )
+        print(
+            f"    - Meta-model updates across outer loop: "
+            f"{self.outer_steps:_} "
+        )
 
     def instantiate_task_generator(self) -> TaskGenerator:
         return self.tasks_generator_cls(**self.tasks_generator_params)
@@ -170,14 +233,8 @@ class BaseMetaAlgorithm(ABC):
     def get_meta_optimizer_params(self) -> Iterable[th.nn.Parameter]:
         """
         Parameters optimized by the outer-loop optimizer.
-        Subclasses can override this to optimize a subset of parameters.
         """
         if self.ignored_params and self.ignore_optimizer_params:
-            if self.verbose >= 1:
-                print(
-                f"[BaseMetaRL] Filtering out ignored_params in optimizer."
-                f"{self.outer_steps:_} "
-            )
             return (
                 param
                 for name, param in self.meta_policy.named_parameters()
@@ -212,10 +269,9 @@ class BaseMetaAlgorithm(ABC):
         }
 
         if self.verbose >= 1:
-            print(
-                f"[BaseMetaRL] Ignored parameters during meta optimization: "
-                f"{ignored}."
-            )
+            print("[BaseMetaRL] Filtering out ignored_params in meta-model.")
+            if self.ignore_optimizer_params:
+                print("[BaseMetaRL] Filtering out ignored_params in optimizer.")                
 
         unmatched_prefixes = [
             prefix
