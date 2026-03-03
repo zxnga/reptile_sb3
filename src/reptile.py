@@ -29,6 +29,7 @@ class ReptileMetaRL(BaseMetaAlgorithm):
         task_batch_size: int = 1,
         inner_loop_params: Optional[Dict[str, Any]] = None,
         ignored_layers: Optional[List[str]] = None,
+        ignore_optimizer_params: bool = False,
         verbose: int = 0,
         device: th.device | str = "auto",
         tensorboard_logs: Optional[str] = "./inner_loop_logs",
@@ -48,6 +49,7 @@ class ReptileMetaRL(BaseMetaAlgorithm):
             task_batch_size=task_batch_size,
             inner_loop_params=inner_loop_params,
             ignored_layers=ignored_layers,
+            ignore_optimizer_params=ignore_optimizer_params,
             verbose=verbose,
             device=device,
             tensorboard_logs=tensorboard_logs,
@@ -99,7 +101,7 @@ class ReptileMetaRL(BaseMetaAlgorithm):
             self.sync_meta_optimizer_lr(self.meta_optimizer, meta_lr)
             self.meta_optimizer.zero_grad(set_to_none=True)
 
-            for name, param in self.policy.named_parameters():
+            for name, param in self.meta_policy.named_parameters():
                 if name in self.ignored_params:
                     continue
                 # -1 * accumulated_deltas = original_params - task_params
