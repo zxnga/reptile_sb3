@@ -48,6 +48,7 @@ class BaseMetaAlgorithm(ABC):
         task_batch_size: int = 1,
         inner_loop_params: Optional[Dict[str, Any]] = None,
         ignored_layers: Optional[List[str]] = None,
+        ignore_optimizer_params: bool = False,
         # save_frequency: int = 1,
         verbose: int = 0,
         device: th.device | str = "auto",
@@ -74,10 +75,8 @@ class BaseMetaAlgorithm(ABC):
         self.inner_loop_params = inner_loop_params if inner_loop_params is not None else {}
         self.task_batch_size = task_batch_size
         self.ignored_layer_prefixes = ignored_layers or []
-        if self.ignored_params and verbose >= 1:
-            print(f"[BaseMetaRL] Ignoring {len(self.ignored_params)} parameters in meta-update:")
-            for name in sorted(self.ignored_params):
-                print(f"  - {name}")
+        self.ignored_params: set[str] = set()
+        self.ignore_optimizer_params = ignore_optimizer_params
 
         self.use_meta_optimizer = use_meta_optimizer
         self.meta_optimizer_cls = meta_optimizer_cls
@@ -94,6 +93,11 @@ class BaseMetaAlgorithm(ABC):
 
         self.meta_algo = self.instantiate_model(first_env)
         self.meta_policy = self.meta_algo.policy
+        self.ignored_params = self._get_ignored_params(self.ignored_layer_prefixes)
+        if self.ignored_params and verbose >= 1:
+            print(f"[BaseMetaRL] Ignoring {len(self.ignored_params)} parameters in meta-update:")
+            for name in sorted(self.ignored_params):
+                print(f"  - {name}")
         self.meta_optimizer = self._build_meta_optimizer()
 
         self.updates_per_rollout = None
@@ -168,6 +172,17 @@ class BaseMetaAlgorithm(ABC):
         Parameters optimized by the outer-loop optimizer.
         Subclasses can override this to optimize a subset of parameters.
         """
+        if self.ignored_params and self.ignore_optimizer_params:
+            if self.verbose >= 1:
+                print(
+                f"[BaseMetaRL] Filtering out ignored_params in optimizer."
+                f"{self.outer_steps:_} "
+            )
+            return (
+                param
+                for name, param in self.meta_policy.named_parameters()
+                if name not in self.ignored_params
+            )
         return self.meta_policy.parameters()
 
     def _build_meta_optimizer(self) -> Optional[Optimizer]:
@@ -195,6 +210,12 @@ class BaseMetaAlgorithm(ABC):
             for name in all_param_names
             if any(name.startswith(prefix) for prefix in prefixes)
         }
+
+        if self.verbose >= 1:
+            print(
+                f"[BaseMetaRL] Ignored parameters during meta optimization: "
+                f"{ignored}."
+            )
 
         unmatched_prefixes = [
             prefix
