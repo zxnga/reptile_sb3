@@ -1,6 +1,6 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Type, Optional, Tuple
+from typing import Any, Dict, List, Type, Optional, Tuple, Literal
 from collections.abc import Iterable
 
 import numpy as np
@@ -326,6 +326,7 @@ class BaseMetaAlgorithm(ABC):
         self,
         outer_steps: Optional[int] = None,
         reset_task_history_before_learning: bool = True,
+        task_seed_mode: Literal["generator", "meta_step"] = "generator",
     ) -> "BaseMetaRL":
         """
         Meta-training loop (outer loop).
@@ -338,6 +339,10 @@ class BaseMetaAlgorithm(ABC):
         Args:
             outer_steps: override number of meta-iterations; if None, use self.outer_steps.
             reset_task_history_before_learning: reset TaskGenerator history at the start.
+            task_seed_mode:
+              - "generator": TaskGenerator draws seeds from its own RNG (default).
+              - "meta_step": each sampled task uses seed=meta_step_index (for strict 
+                            reproducibility purposes).
 
         Returns:
             self (so you can write `meta_learner.learn(...).get_meta_policy()`).
@@ -353,13 +358,26 @@ class BaseMetaAlgorithm(ABC):
         if reset_task_history_before_learning:
             self.task_generator.reset_history()
 
+        if task_seed_mode not in ("generator", "meta_step"):
+            raise ValueError(
+                f"Unknown task_seed_mode={task_seed_mode!r}. "
+                "Expected 'generator' or 'meta_step'."
+            )
+
+        if self.verbose >= 1:
+            print(f"[BaseMetaRL] Task seed mode: {task_seed_mode}.")
+
         for outer in range(self.outer_steps):
             task_models = []
-
-            task_batch = [
-                self.task_generator.get_task(outer * self.task_batch_size + i)
-                for i in range(self.task_batch_size)
-            ]
+            task_batch = []
+            for i in range(self.task_batch_size):
+                task_meta_step = outer * self.task_batch_size + i
+                if task_seed_mode == "meta_step":
+                    task_batch.append(
+                        self.task_generator.get_task(task_meta_step, seed=task_meta_step)
+                    )
+                else:
+                    task_batch.append(self.task_generator.get_task(task_meta_step))
 
             for env, task_info, first_occurrence in task_batch:
                 task_model = self.instantiate_model(env)
