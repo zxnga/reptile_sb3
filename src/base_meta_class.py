@@ -108,7 +108,7 @@ class BaseMetaAlgorithm(ABC):
         self.device = get_device(device)
         self.verbose = verbose
         if self.verbose >= 1:
-            print(f"Using {self.device} device across all loops.")
+            print(f"[BaseMetaRL] Using {self.device} device across all loops.")
 
         self.tasks_generator_cls = tasks_generator_cls
         self.tasks_generator_params = tasks_generator_params
