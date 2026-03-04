@@ -103,28 +103,40 @@ class TaskGenerator:
               - for dynamic tasks: meta-step when this task spec first appeared
               - for static task lists: None
         """
-
-        # predefined list of tasks
         if self.tasks is not None:
-            if len(self.tasks) == 0:
-                raise ValueError("`tasks` must be non-empty.")
+            return self._get_task_from_predefined_list(meta_step)
+        return self._get_task_from_callable(meta_step, seed=seed)
 
-            if self.sampling_method == "cyclic":
-                env, info = self.tasks[meta_step % len(self.tasks)]
-            elif self.sampling_method == "random":
-                env, info = self._py_rng.choice(self.tasks)
-            elif self.sampling_method == "weighted":
-                env, info = self._py_rng.choices(
-                    self.tasks,
-                    weights=self.sampling_weights,
-                    k=1,
-                )[0]
-            else:
-                raise ValueError(f"Unknown sampling_method: {self.sampling_method!r}")
+    def _get_task_from_predefined_list(
+        self,
+        meta_step: int,
+    ) -> Tuple[gym.Env, Dict[str, Any], Optional[int]]:
+        if self.tasks is None or len(self.tasks) == 0:
+            raise ValueError("`tasks` must be non-empty.")
 
-            return env, info, None
+        if self.sampling_method == "cyclic":
+            env, info = self.tasks[meta_step % len(self.tasks)]
+        elif self.sampling_method == "random":
+            env, info = self._py_rng.choice(self.tasks)
+        elif self.sampling_method == "weighted":
+            env, info = self._py_rng.choices(
+                self.tasks,
+                weights=self.sampling_weights,
+                k=1,
+            )[0]
+        else:
+            raise ValueError(f"Unknown sampling_method: {self.sampling_method!r}")
 
-        # task generated using callable
+        return env, info, None
+
+    def _get_task_from_callable(
+        self,
+        meta_step: int,
+        seed: Optional[int] = None,
+    ) -> Tuple[gym.Env, Dict[str, Any], Optional[int]]:
+        if self.task_callable is None:
+            raise ValueError("`task_callable` must be provided for callable-based task generation.")
+
         can_revisit = (meta_step >= self.revisit_start) and bool(self.selected_tasks)
         if can_revisit and (self._rng.random() < self.revisit_ratio):
             task_idx = self._select_task_index_for_revisit()
