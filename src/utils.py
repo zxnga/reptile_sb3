@@ -1,4 +1,4 @@
-from typing import Union, Dict, List, Tuple, Any, Callable
+from typing import Union, Dict, List, Tuple, Any, Callable, Optional
 from enum import Enum
 
 import math
