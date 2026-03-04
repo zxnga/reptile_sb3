@@ -1,5 +1,6 @@
 from typing import Any, Dict, Optional, List, Callable, Tuple
 import random
+import inspect
 
 import gymnasium as gym
 import numpy as np
@@ -7,6 +8,9 @@ import numpy as np
 ListTask = List[Tuple[gym.Env, Dict[str, Any]]]
 
 # TODO: decaying revisits
+
+def accepts_named_arg(func, name: str) -> bool:
+    return name in inspect.signature(func).parameters
 
 class TaskGenerator:
     """
@@ -41,6 +45,10 @@ class TaskGenerator:
         assert tasks is not None or task_callable is not None, (
             "Either 'tasks' (list of tasks) or 'task_callable' "
             "(callable to generate tasks) must be provided."
+        )
+        assert task_callable is None or accepts_named_arg(task_callable, "random_seed"), (
+            "When using a task_callable to generate tasks, the function should "
+            "explicitly use the 'random_seed' parameter."
         )
 
         self.tasks = tasks
