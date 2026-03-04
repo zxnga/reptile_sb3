@@ -108,7 +108,7 @@ class BaseMetaAlgorithm(ABC):
         self.device = get_device(device)
         self.verbose = verbose
         if self.verbose >= 1:
-            print(f"Using {self.device} device")
+            print(f"Using {self.device} device across all loops.")
 
         self.tasks_generator_cls = tasks_generator_cls
         self.tasks_generator_params = tasks_generator_params
@@ -227,8 +227,19 @@ class BaseMetaAlgorithm(ABC):
         """
         # maybe use .set_env instead that can be quicker (reset buffers for off policy, cast parameters to meta model params)
         policy = self.rl_algo_kwargs.get("policy", "MlpPolicy")
-        algo_kwargs = {k: v for k, v in self.rl_algo_kwargs.items() if k != "policy"}
-        return self.rl_algorithm(env=env, policy=policy, **algo_kwargs)
+        device = self.rl_algo_kwargs.get("device", self.device)
+
+        algo_kwargs = {
+            k: v
+            for k, v in self.rl_algo_kwargs.items()
+            if k not in {"policy", "device"}
+        }
+        return self.rl_algorithm(
+            env=env,
+            policy=policy,
+            device=device,
+            **algo_kwargs
+        )
 
     def get_meta_optimizer_params(self) -> Iterable[th.nn.Parameter]:
         """
