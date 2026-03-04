@@ -72,7 +72,7 @@ def normalize_lr_schedule(lr_or_schedule: LRSchedule) -> Callable[[int, int], fl
 def load_weights_from_source(
     source: Union[Module, Dict[str, torch.Tensor]],
     target_model: Module,
-    exclude_layers: List[str] = [],
+    exclude_layers: Optional[List[str]] = None,
     detach: bool = True
 ) -> None:
     """
@@ -94,6 +94,8 @@ def load_weights_from_source(
     else:
         raise ValueError("Source must be either an nn.Module or a dictionary of weights.")
 
+    exclude_layers = [] if exclude_layers is None else exclude_layers
+    
     target_state_dict = target_model.state_dict()
     if detach:
         filtered_state_dict = {
