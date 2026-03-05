@@ -2,6 +2,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Type, Optional, Tuple, Literal
 from collections.abc import Iterable
+import time
 
 import numpy as np
 import torch as th
@@ -10,7 +11,8 @@ from torch.optim import Optimizer
 from stable_baselines3.common.type_aliases import GymEnv
 from stable_baselines3.common.vec_env import VecEnv
 from stable_baselines3.common.policies import BasePolicy
-from stable_baselines3.common.utils import get_device
+from stable_baselines3.common.logger import Logger
+from stable_baselines3.common.utils import get_device, configure_logger
 
 from .task_generator import TaskGenerator
 from .utils import load_weights_from_source, compute_updates
@@ -18,6 +20,8 @@ from .utils import LRSchedule, normalize_lr_schedule
 
 #TODO: either here or in child class (reptile, fomaml) filter parameters of the optimizer
 # based on the ignored layers.
+
+# TODO: override inner loop params using parameter, for meta-testing instansciate model
 
 class BaseMetaAlgorithm(ABC):
     """
@@ -52,7 +56,7 @@ class BaseMetaAlgorithm(ABC):
         # save_frequency: int = 1,
         verbose: int = 0,
         device: th.device | str = "auto",
-        tensorboard_logs: Optional[str] = './inner_loop_logs',
+        tensorboard_logs: Optional[str] = './logs',
     ):
         assert hasattr(rl_algorithm, "learn"), "rl_algorithm must have a .learn() method (SB3)."
         assert task_batch_size > 0, f"task_batch_size must be > 0, got {task_batch_size}"
@@ -82,6 +86,7 @@ class BaseMetaAlgorithm(ABC):
         self._init_ignored_params()
         self._init_meta_optimizer()
         self._init_budget_counters()
+        self._init_tensorboard_writer()
         self._log_startup_summary()
 
     def _init_core_config(
@@ -133,6 +138,25 @@ class BaseMetaAlgorithm(ABC):
         self._last_optimizer_meta_lr: Optional[float] = self.current_meta_lr
 
         self.tensorboard_logs = tensorboard_logs
+        self.meta_logger: Optional[Logger] = None
+
+    def _init_tensorboard_writer(self) -> None:
+        if self.tensorboard_logs is None:
+            return
+        try:
+            self.meta_logger = configure_logger(
+                verbose=self.verbose,
+                tensorboard_log=self.tensorboard_logs,
+                tb_log_name=self.__class__.__name__,
+                reset_num_timesteps=False,
+            )
+        except ImportError:
+            self.meta_logger = None
+            if self.verbose >= 1:
+                print("[BaseMetaRL] TensorBoard unavailable (tensorboard not installed).")
+            return
+        if self.verbose >= 1:
+            print(f"[BaseMetaRL] TensorBoard outer-loop logs: {self.tensorboard_logs}")
 
     def _init_task_generator_and_bootstrap_env(self) -> GymEnv | VecEnv:
         self.task_generator = self.instantiate_task_generator()
@@ -215,6 +239,52 @@ class BaseMetaAlgorithm(ABC):
             f"{self.outer_steps:_} "
         )
 
+    def _log_outer_step_metrics(
+        self,
+        outer_step: int,
+        inner_total_seconds: float,
+        meta_update_seconds: float,
+    ) -> None:
+        if self.meta_logger is None:
+            return
+
+        global_outer = outer_step + 1
+        outer_step_seconds = inner_total_seconds + meta_update_seconds
+
+        self.meta_logger.record("meta/outer_step", global_outer)
+        if self.current_meta_lr is not None:
+            self.meta_logger.record("meta/meta_lr", float(self.current_meta_lr))
+        self.meta_logger.record("meta/task_batch_size", self.task_batch_size)
+        self.meta_logger.record("meta/inner_steps", self.inner_steps)
+        self.meta_logger.record(
+            "meta/total_env_steps_seen",
+            global_outer * self.inner_steps * self.task_batch_size,
+        )
+
+        if self.updates_per_rollout is not None and self.total_updates is not None:
+            total_updates_all_tasks_per_outer = self.total_updates * self.task_batch_size
+            self.meta_logger.record(
+                "meta/updates_per_rollout_per_task",
+                self.updates_per_rollout,
+            )
+            self.meta_logger.record(
+                "meta/total_updates_per_task_per_outer",
+                self.total_updates,
+            )
+            self.meta_logger.record(
+                "meta/total_updates_all_tasks_per_outer",
+                total_updates_all_tasks_per_outer,
+            )
+            self.meta_logger.record(
+                "meta/total_updates_seen_all_tasks",
+                total_updates_all_tasks_per_outer * global_outer,
+            )
+
+        self.meta_logger.record("time/outer_step_seconds", outer_step_seconds)
+        self.meta_logger.record("time/inner_total_seconds", inner_total_seconds)
+        self.meta_logger.record("time/meta_update_seconds", meta_update_seconds)
+        self.meta_logger.dump(step=global_outer)
+
     def instantiate_task_generator(self) -> TaskGenerator:
         return self.tasks_generator_cls(**self.tasks_generator_params)
 
@@ -224,6 +294,8 @@ class BaseMetaAlgorithm(ABC):
 
         rl_algo_kwargs is expected to contain 'policy' and SB3 hyperparams:
           { "policy": "MlpPolicy", "n_steps": 128, "batch_size": 64, ... }
+
+          # TODO: override inner loop params using parameter, for meta-testing
         """
         # maybe use .set_env instead that can be quicker (reset buffers for off policy, cast parameters to meta model params)
         policy = self.rl_algo_kwargs.get("policy", "MlpPolicy")
@@ -367,26 +439,44 @@ class BaseMetaAlgorithm(ABC):
         if self.verbose >= 1:
             print(f"[BaseMetaRL] Task seed mode: {task_seed_mode}.")
 
-        for outer in range(self.outer_steps):
-            task_models = []
-            task_batch = []
-            for i in range(self.task_batch_size):
-                task_meta_step = outer * self.task_batch_size + i
-                if task_seed_mode == "meta_step":
-                    task_batch.append(
-                        self.task_generator.get_task(task_meta_step, seed=task_meta_step)
-                    )
-                else:
-                    task_batch.append(self.task_generator.get_task(task_meta_step))
+        if self.meta_logger is None and self.tensorboard_logs is not None:
+            self._init_tensorboard_writer()
 
-            for env, task_info, first_occurrence in task_batch:
-                task_model = self.instantiate_model(env)
-                self.copy_meta_to_task(task_model)
+        try:
+            for outer in range(self.outer_steps):
+                task_models = []
+                task_batch = []
+                for i in range(self.task_batch_size):
+                    task_meta_step = outer * self.task_batch_size + i
+                    if task_seed_mode == "meta_step":
+                        task_batch.append(
+                            self.task_generator.get_task(task_meta_step, seed=task_meta_step)
+                        )
+                    else:
+                        task_batch.append(self.task_generator.get_task(task_meta_step))
 
-                self.inner_adapt(task_model)
-                task_models.append(task_model)
+                inner_start = time.perf_counter()
+                for env, task_info, first_occurrence in task_batch:
+                    task_model = self.instantiate_model(env)
+                    self.copy_meta_to_task(task_model)
 
-            self.meta_update(task_models, outer)
+                    self.inner_adapt(task_model)
+                    task_models.append(task_model)
+                inner_total_seconds = time.perf_counter() - inner_start
+
+                meta_start = time.perf_counter()
+                self.meta_update(task_models, outer)
+                meta_update_seconds = time.perf_counter() - meta_start
+
+                self._log_outer_step_metrics(
+                    outer_step=outer,
+                    inner_total_seconds=inner_total_seconds,
+                    meta_update_seconds=meta_update_seconds,
+                )
+        finally:
+            if self.meta_logger is not None:
+                self.meta_logger.close()
+                self.meta_logger = None
 
         return self
 
