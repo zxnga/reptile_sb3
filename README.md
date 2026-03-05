@@ -1,5 +1,8 @@
 # Reptile_sb3
 
+<img src="figs/meta_sb3_logo.png" align="right" width="120" />
+
+
 Extension/wrapper around [Stable-Baselines3 (SB3)](https://github.com/DLR-RM/stable-baselines3) to run meta-RL with first-order meta-learning updates.
 
 ## What this project is
