@@ -61,55 +61,6 @@ class BaseMetaAlgorithm(ABC):
         assert hasattr(rl_algorithm, "learn"), "rl_algorithm must have a .learn() method (SB3)."
         assert task_batch_size > 0, f"task_batch_size must be > 0, got {task_batch_size}"
 
-        self._init_core_config(
-            tasks_generator_cls=tasks_generator_cls,
-            tasks_generator_params=tasks_generator_params,
-            rl_algorithm=rl_algorithm,
-            rl_algo_kwargs=rl_algo_kwargs,
-            inner_steps=inner_steps,
-            outer_steps=outer_steps,
-            meta_lr=meta_lr,
-            use_meta_optimizer=use_meta_optimizer,
-            meta_optimizer_cls=meta_optimizer_cls,
-            meta_optimizer_kwargs=meta_optimizer_kwargs,
-            task_batch_size=task_batch_size,
-            inner_loop_params=inner_loop_params,
-            ignored_layers=ignored_layers,
-            ignore_optimizer_params=ignore_optimizer_params,
-            verbose=verbose,
-            device=device,
-            tensorboard_logs=tensorboard_logs,
-        )
-
-        first_env = self._init_task_generator_and_bootstrap_env()
-        self._init_meta_model(first_env)
-        self._init_ignored_params()
-        self._init_meta_optimizer()
-        self._init_budget_counters()
-        self._init_tensorboard_writer()
-        self._log_startup_summary()
-
-    def _init_core_config(
-        self,
-        *,
-        tasks_generator_cls: Type[TaskGenerator],
-        tasks_generator_params: Dict[str, Any],
-        rl_algorithm: th.nn.Module,
-        rl_algo_kwargs: Dict[str, Any],
-        inner_steps: int,
-        outer_steps: int,
-        meta_lr: LRSchedule,
-        use_meta_optimizer: bool,
-        meta_optimizer_cls: Type[Optimizer],
-        meta_optimizer_kwargs: Optional[Dict[str, Any]],
-        task_batch_size: int,
-        inner_loop_params: Optional[Dict[str, Any]],
-        ignored_layers: Optional[List[str]],
-        ignore_optimizer_params: bool,
-        verbose: int,
-        device: th.device | str,
-        tensorboard_logs: Optional[str],
-    ) -> None:
         self.device = get_device(device)
         self.verbose = verbose
         if self.verbose >= 1:
@@ -139,6 +90,14 @@ class BaseMetaAlgorithm(ABC):
 
         self.tensorboard_logs = tensorboard_logs
         self.meta_logger: Optional[Logger] = None
+
+        first_env = self._init_task_generator_and_bootstrap_env()
+        self._init_meta_model(first_env)
+        self._init_ignored_params()
+        self.meta_optimizer = self._build_meta_optimizer()
+        self._init_budget_counters()
+        self._init_tensorboard_writer()
+        self._log_startup_summary()
 
     def _init_tensorboard_writer(self) -> None:
         if self.tensorboard_logs is None:
@@ -174,9 +133,6 @@ class BaseMetaAlgorithm(ABC):
             print(f"[BaseMetaRL] Ignoring {len(self.ignored_params)} parameters in meta-update:")
             for name in sorted(self.ignored_params):
                 print(f"  - {name}")
-
-    def _init_meta_optimizer(self) -> None:
-        self.meta_optimizer = self._build_meta_optimizer()
 
     def _init_budget_counters(self) -> None:
         self.updates_per_rollout = None
