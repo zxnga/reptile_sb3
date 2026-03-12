@@ -21,7 +21,7 @@ from .utils import LRSchedule, normalize_lr_schedule
 #TODO: either here or in child class (reptile, fomaml) filter parameters of the optimizer
 # based on the ignored layers.
 
-# TODO: override inner loop params using parameter, for meta-testing instansciate model
+#TODO: implement the save_frequency logic to save multiple checkpoints of the meta-model
 
 class BaseMetaAlgorithm(ABC):
     """
@@ -244,22 +244,26 @@ class BaseMetaAlgorithm(ABC):
     def instantiate_task_generator(self) -> TaskGenerator:
         return self.tasks_generator_cls(**self.tasks_generator_params)
 
-    def instantiate_model(self, env: GymEnv | VecEnv):
+    def instantiate_model(
+        self,
+        env: GymEnv | VecEnv,
+        rl_algo_kwargs: Optional[Dict[str, Any]] = None #used to modify inner-loop params when meta-testing
+    ):
         """
         Create an SB3 model given an environment.
 
         rl_algo_kwargs is expected to contain 'policy' and SB3 hyperparams:
           { "policy": "MlpPolicy", "n_steps": 128, "batch_size": 64, ... }
-
-          # TODO: override inner loop params using parameter, for meta-testing
         """
-        # maybe use .set_env instead that can be quicker (reset buffers for off policy, cast parameters to meta model params)
-        policy = self.rl_algo_kwargs.get("policy", "MlpPolicy")
-        device = self.rl_algo_kwargs.get("device", self.device)
+        # TODO: maybe use .set_env instead that can be quicker (reset buffers for off policy, cast parameters to meta model params)
+
+        params = rl_algo_kwargs if rl_algo_kwargs is not None else self.rl_algo_kwargs
+        policy = params.get("policy", "MlpPolicy")
+        device = params.get("device", self.device)
 
         algo_kwargs = {
             k: v
-            for k, v in self.rl_algo_kwargs.items()
+            for k, v in params.items()
             if k not in {"policy", "device"}
         }
         return self.rl_algorithm(
