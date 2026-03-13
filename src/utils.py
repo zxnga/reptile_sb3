@@ -69,6 +69,20 @@ def normalize_lr_schedule(lr_or_schedule: LRSchedule) -> Callable[[int, int], fl
         "`lr_or_schedule` must be a float or a callable(step, total_steps) -> float."
     )
 
+def to_json_safe(value: Any) -> Any:
+    """
+    Recursively convert values into JSON-serializable objects.
+
+    Non-serializable leaves are converted to repr(value).
+    """
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {str(k): to_json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [to_json_safe(v) for v in value]
+    return repr(value)
+
 def load_weights_from_source(
     source: Union[Module, Dict[str, torch.Tensor]],
     target_model: Module,

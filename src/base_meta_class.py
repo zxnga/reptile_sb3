@@ -3,6 +3,9 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Type, Optional, Tuple, Literal
 from collections.abc import Iterable
 import time
+import os
+import json
+from datetime import datetime
 
 import numpy as np
 import torch as th
@@ -15,13 +18,12 @@ from stable_baselines3.common.logger import Logger
 from stable_baselines3.common.utils import get_device, configure_logger
 
 from .task_generator import TaskGenerator
-from .utils import load_weights_from_source, compute_updates
+from .utils import load_weights_from_source, compute_updates, to_json_safe
 from .utils import LRSchedule, normalize_lr_schedule
 
-#TODO: either here or in child class (reptile, fomaml) filter parameters of the optimizer
-# based on the ignored layers.
-
 #TODO: implement the save_frequency logic to save multiple checkpoints of the meta-model
+
+#TODO: implement a setup_learn function a-la sb3 to clean the .learn() function
 
 class BaseMetaAlgorithm(ABC):
     """
@@ -56,7 +58,7 @@ class BaseMetaAlgorithm(ABC):
         # save_frequency: int = 1,
         verbose: int = 0,
         device: th.device | str = "auto",
-        tensorboard_logs: Optional[str] = './logs',
+        tensorboard_logs: Optional[str] = './meta-logs',
     ):
         assert hasattr(rl_algorithm, "learn"), "rl_algorithm must have a .learn() method (SB3)."
         assert task_batch_size > 0, f"task_batch_size must be > 0, got {task_batch_size}"
@@ -96,18 +98,22 @@ class BaseMetaAlgorithm(ABC):
         self._init_ignored_params()
         self.meta_optimizer = self._build_meta_optimizer()
         self._init_budget_counters()
-        self._init_tensorboard_writer()
         self._log_startup_summary()
 
-    def _init_tensorboard_writer(self) -> None:
+    def _init_tensorboard_writer(
+        self,
+        tb_log_name: Optional[str] = None,
+        reset_num_timesteps: bool = True,
+    ) -> None:
         if self.tensorboard_logs is None:
             return
+        run_name = tb_log_name or self.__class__.__name__
         try:
             self.meta_logger = configure_logger(
                 verbose=self.verbose,
                 tensorboard_log=self.tensorboard_logs,
-                tb_log_name=self.__class__.__name__,
-                reset_num_timesteps=False,
+                tb_log_name=run_name,
+                reset_num_timesteps=reset_num_timesteps,
             )
         except ImportError:
             self.meta_logger = None
@@ -115,7 +121,10 @@ class BaseMetaAlgorithm(ABC):
                 print("[BaseMetaRL] TensorBoard unavailable (tensorboard not installed).")
             return
         if self.verbose >= 1:
-            print(f"[BaseMetaRL] TensorBoard outer-loop logs: {self.tensorboard_logs}")
+            print(
+                f"[BaseMetaRL] TensorBoard outer-loop logs: {self.tensorboard_logs} "
+                f"(run={run_name})"
+            )
 
     def _init_task_generator_and_bootstrap_env(self) -> GymEnv | VecEnv:
         self.task_generator = self.instantiate_task_generator()
@@ -241,6 +250,49 @@ class BaseMetaAlgorithm(ABC):
         self.meta_logger.record("time/meta_update_seconds", meta_update_seconds)
         self.meta_logger.dump(step=global_outer)
 
+    def _save_checkpoint_with_metadata(
+        self,
+        checkpoint_path: str,
+        outer_step_completed: int,
+        task_seed_mode: str,
+        save_metadata: bool = True,
+    ) -> None:
+        self.save_meta_algo(checkpoint_path)
+
+        metadata = {
+            "algorithm_class": self.__class__.__name__,
+            "outer_step_completed": outer_step_completed,
+            "outer_steps_target": self.outer_steps,
+            "inner_steps": self.inner_steps,
+            "task_batch_size": self.task_batch_size,
+            "task_seed_mode": task_seed_mode,
+            "meta_lr_current": self.current_meta_lr,
+            "use_meta_optimizer": self.use_meta_optimizer,
+            "meta_optimizer_cls": getattr(self.meta_optimizer_cls, "__name__", str(self.meta_optimizer_cls)),
+            "meta_optimizer_kwargs": to_json_safe(self.meta_optimizer_kwargs),
+            "ignored_layers": to_json_safe(self.ignored_layer_prefixes),
+            "ignore_optimizer_params": self.ignore_optimizer_params,
+            "rl_algorithm": getattr(self.rl_algorithm, "__name__", str(self.rl_algorithm)),
+            "rl_algo_kwargs": to_json_safe(self.rl_algo_kwargs),
+            "tasks_generator_cls": getattr(self.tasks_generator_cls, "__name__", str(self.tasks_generator_cls)),
+            "tasks_generator_params": to_json_safe(self.tasks_generator_params),
+        }
+        json_path = f"{checkpoint_path}.json"
+        with open(json_path, "w", encoding="utf-8") as fp:
+            json.dump(metadata, fp, indent=2, sort_keys=True)
+
+    def _build_checkpoint_run_dir(
+        self,
+        base_path: str,
+        tb_log_name: Optional[str],
+    ) -> str:
+        run_name = tb_log_name or self.__class__.__name__
+        safe_run_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in run_name)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_dir = os.path.join(base_path, f"{safe_run_name}_{timestamp}")
+        os.makedirs(run_dir, exist_ok=True)
+        return run_dir
+
     def instantiate_task_generator(self) -> TaskGenerator:
         return self.tasks_generator_cls(**self.tasks_generator_params)
 
@@ -359,6 +411,11 @@ class BaseMetaAlgorithm(ABC):
         outer_steps: Optional[int] = None,
         reset_task_history_before_learning: bool = True,
         task_seed_mode: Literal["generator", "meta_step"] = "generator",
+        tb_log_name: Optional[str] = None,
+        save_freq: int = 0,
+        save_path: Optional[str] = None,
+        save_prefix: str = "meta_ckpt",
+        save_final: bool = True,
     ) -> "BaseMetaRL":
         """
         Meta-training loop (outer loop).
@@ -375,6 +432,11 @@ class BaseMetaAlgorithm(ABC):
               - "generator": TaskGenerator draws seeds from its own RNG (default).
               - "meta_step": each sampled task uses seed=meta_step_index (for strict 
                             reproducibility purposes).
+            tb_log_name: Optional TensorBoard run name. If None, defaults to class name.
+            save_freq: Save checkpoint every `save_freq` outer steps. 0 disables periodic saves.
+            save_path: Directory where checkpoints are saved. Defaults to "./checkpoints".
+            save_prefix: Prefix used for checkpoint filenames.
+            save_final: If True, always save final checkpoint at the end of training.
 
         Returns:
             self (so you can write `meta_learner.learn(...).get_meta_policy()`).
@@ -398,10 +460,30 @@ class BaseMetaAlgorithm(ABC):
 
         if self.verbose >= 1:
             print(f"[BaseMetaRL] Task seed mode: {task_seed_mode}.")
+        if save_freq < 0:
+            raise ValueError(f"`save_freq` must be >= 0, got {save_freq}.")
 
-        if self.meta_logger is None and self.tensorboard_logs is not None:
-            self._init_tensorboard_writer()
+        checkpoint_dir = save_path or "./checkpoints"
+        checkpoint_run_dir = None
+        if save_freq > 0 or save_final:
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            checkpoint_run_dir = self._build_checkpoint_run_dir(
+                base_path=checkpoint_dir,
+                tb_log_name=tb_log_name,
+            )
+            if self.verbose >= 1:
+                print(f"[BaseMetaRL] Checkpoints for this run: {checkpoint_run_dir}")
 
+        if self.tensorboard_logs is not None:
+            if self.meta_logger is not None:
+                self.meta_logger.close()
+                self.meta_logger = None
+            self._init_tensorboard_writer(
+                tb_log_name=tb_log_name,
+                reset_num_timesteps=True,
+            )
+
+        last_saved_outer = 0
         try:
             for outer in range(self.outer_steps):
                 task_models = []
@@ -432,6 +514,31 @@ class BaseMetaAlgorithm(ABC):
                     outer_step=outer,
                     inner_total_seconds=inner_total_seconds,
                     meta_update_seconds=meta_update_seconds,
+                )
+
+                global_outer = outer + 1
+                if save_freq > 0 and (global_outer % save_freq == 0):
+                    ckpt_base = os.path.join(
+                        checkpoint_run_dir,
+                        f"{save_prefix}_outer_{global_outer}",
+                    )
+                    self._save_checkpoint_with_metadata(
+                        checkpoint_path=ckpt_base,
+                        outer_step_completed=global_outer,
+                        task_seed_mode=task_seed_mode,
+                        save_metadata=False
+                    )
+                    last_saved_outer = global_outer
+
+            if save_final and last_saved_outer != self.outer_steps:
+                final_base = os.path.join(
+                    checkpoint_run_dir,
+                    f"{save_prefix}_outer_{self.outer_steps}",
+                )
+                self._save_checkpoint_with_metadata(
+                    checkpoint_path=final_base,
+                    outer_step_completed=self.outer_steps,
+                    task_seed_mode=task_seed_mode,
                 )
         finally:
             if self.meta_logger is not None:

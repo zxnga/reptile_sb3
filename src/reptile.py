@@ -32,7 +32,7 @@ class ReptileMetaRL(BaseMetaAlgorithm):
         ignore_optimizer_params: bool = False,
         verbose: int = 0,
         device: th.device | str = "auto",
-        tensorboard_logs: Optional[str] = "./inner_loop_logs",
+        tensorboard_logs: Optional[str] = "./meta-logs",
         **kwargs,
     ):
         super().__init__(
