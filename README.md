@@ -21,7 +21,7 @@ It is designed for:
 
 
 <p align="center">
-  <img src="figs/meta-rl-sb3.png" alt="My Image" width="350">
+  <img src="figs/meta-rl-sb3.png" alt="My Image" width="400">
 </p>
 
 For detailed information on meta-RL we redirect to:
