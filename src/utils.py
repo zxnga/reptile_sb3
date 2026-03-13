@@ -4,6 +4,7 @@ from enum import Enum
 import math
 import os
 import warnings
+from datetime import datetime
 import torch
 from torch.nn import Module
 
@@ -82,6 +83,22 @@ def to_json_safe(value: Any) -> Any:
     if isinstance(value, (list, tuple, set)):
         return [to_json_safe(v) for v in value]
     return repr(value)
+
+
+def build_checkpoint_run_dir(
+    *,
+    base_path: str,
+    run_name: str,
+) -> str:
+    """
+    Build and create a run-specific checkpoint directory:
+      <base_path>/<sanitized_run_name>_<YYYYMMDD_HHMMSS>
+    """
+    safe_run_name = sanitize_name(run_name)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = os.path.join(base_path, f"{safe_run_name}_{timestamp}")
+    os.makedirs(run_dir, exist_ok=True)
+    return run_dir
 
 def sanitize_name(name: str) -> str:
         return "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in name)

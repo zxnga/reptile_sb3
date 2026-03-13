@@ -18,7 +18,13 @@ from stable_baselines3.common.logger import Logger
 from stable_baselines3.common.utils import get_device, configure_logger
 
 from .task_generator import TaskGenerator
-from .utils import load_weights_from_source, compute_updates, to_json_safe, sanitize_name
+from .utils import (
+    load_weights_from_source,
+    compute_updates,
+    to_json_safe,
+    sanitize_name,
+    build_checkpoint_run_dir,
+)
 from .utils import LRSchedule, normalize_lr_schedule
 
 #TODO: add a testing rollout loop inside the .learn to tracl progress of meta-model + log
@@ -278,18 +284,6 @@ class BaseMetaAlgorithm(ABC):
         with open(json_path, "w", encoding="utf-8") as fp:
             json.dump(metadata, fp, indent=2, sort_keys=True)
 
-    def _build_checkpoint_run_dir(
-        self,
-        base_path: str,
-        tb_log_name: Optional[str],
-    ) -> str:
-        run_name = tb_log_name or self.__class__.__name__
-        safe_run_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in run_name)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_dir = os.path.join(base_path, f"{safe_run_name}_{timestamp}")
-        os.makedirs(run_dir, exist_ok=True)
-        return run_dir
-
     def instantiate_task_generator(self) -> TaskGenerator:
         return self.tasks_generator_cls(**self.tasks_generator_params)
 
@@ -471,9 +465,9 @@ class BaseMetaAlgorithm(ABC):
         checkpoint_run_dir = None
         if save_freq > 0 or save_final:
             os.makedirs(checkpoint_dir, exist_ok=True)
-            checkpoint_run_dir = self._build_checkpoint_run_dir(
+            checkpoint_run_dir = build_checkpoint_run_dir(
                 base_path=checkpoint_dir,
-                tb_log_name=tb_log_name,
+                run_name=tb_log_name or self.__class__.__name__,
             )
             if self.verbose >= 1:
                 print(f"[BaseMetaRL] Checkpoints for this run: {checkpoint_run_dir}")
