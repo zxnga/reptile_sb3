@@ -9,6 +9,10 @@ ListTask = List[Tuple[gym.Env, Dict[str, Any]]]
 
 # TODO: decaying revisits
 
+#TODO: add a parameter in get_task to specify wether to save the task in history or train/test modes
+# or different task_generators but make sure there are strictyl the same so that the seeding is the same so we can use the 
+# meta-step logoc.
+
 def accepts_named_arg(func, name: str) -> bool:
     return name in inspect.signature(func).parameters
 
