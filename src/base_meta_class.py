@@ -21,7 +21,6 @@ from .task_generator import TaskGenerator
 from .utils import load_weights_from_source, compute_updates, to_json_safe, sanitize_name
 from .utils import LRSchedule, normalize_lr_schedule
 
-#TODO: implement a setup_learn function a-la sb3 to clean the .learn() function
 #TODO: add a testing rollout loop inside the .learn to tracl progress of meta-model + log
 
 class BaseMetaAlgorithm(ABC):
@@ -428,6 +427,86 @@ class BaseMetaAlgorithm(ABC):
         """
         ...
 
+    def _setup_learn(
+        self,
+        *,
+        outer_steps: Optional[int],
+        reset_task_history_before_learning: bool,
+        task_seed_mode: Literal["generator", "meta_step"],
+        tb_log_name: Optional[str],
+        log_inner_tasks: bool,
+        inner_tb_log_root: Optional[str],
+        save_freq: int,
+        save_path: Optional[str],
+        save_final: bool,
+    ) -> Dict[str, Any]:
+        if outer_steps is not None:
+            if self.verbose >= 1:
+                print(
+                    f"[BaseMetaRL] Overriding class outer_steps ({self.outer_steps}) "
+                    f"with new value for this run: {outer_steps}."
+                )
+            self.outer_steps = outer_steps
+
+        if reset_task_history_before_learning:
+            self.task_generator.reset_history()
+
+        if task_seed_mode not in ("generator", "meta_step"):
+            raise ValueError(
+                f"Unknown task_seed_mode={task_seed_mode!r}. "
+                "Expected 'generator' or 'meta_step'."
+            )
+        if save_freq < 0:
+            raise ValueError(f"`save_freq` must be >= 0, got {save_freq}.")
+
+        if self.verbose >= 1:
+            print(f"[BaseMetaRL] Task seed mode: {task_seed_mode}.")
+            if log_inner_tasks:
+                print(
+                    f"[BaseMetaRL] Inner-loop task logging enabled "
+                    f"(inner_tb_log_root={inner_tb_log_root})."
+                )
+
+        checkpoint_dir = save_path or "./checkpoints"
+        checkpoint_run_dir = None
+        if save_freq > 0 or save_final:
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            checkpoint_run_dir = self._build_checkpoint_run_dir(
+                base_path=checkpoint_dir,
+                tb_log_name=tb_log_name,
+            )
+            if self.verbose >= 1:
+                print(f"[BaseMetaRL] Checkpoints for this run: {checkpoint_run_dir}")
+
+        base_run_name = tb_log_name or self.__class__.__name__
+        safe_run_name = sanitize_name(base_run_name)
+        run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_stem = f"{safe_run_name}_{run_timestamp}"
+
+        inner_run_root = None
+        if log_inner_tasks:
+            inner_root_base = inner_tb_log_root or "./inner-logs"
+            inner_run_root = os.path.join(inner_root_base, run_stem)
+            os.makedirs(inner_run_root, exist_ok=True)
+            if self.verbose >= 1:
+                print(f"[BaseMetaRL] Inner-loop TensorBoard root: {inner_run_root}")
+
+        if self.tensorboard_logs is not None:
+            if self.meta_logger is not None:
+                self.meta_logger.close()
+                self.meta_logger = None
+            self._init_tensorboard_writer(
+                tb_log_name=run_stem,
+                reset_num_timesteps=True,
+            )
+
+        return {
+            "task_seed_mode": task_seed_mode,
+            "log_inner_tasks": log_inner_tasks,
+            "inner_run_root": inner_run_root,
+            "checkpoint_run_dir": checkpoint_run_dir,
+        }
+
     def learn(
         self,
         outer_steps: Optional[int] = None,
@@ -469,65 +548,21 @@ class BaseMetaAlgorithm(ABC):
         Returns:
             self (so you can write `meta_learner.learn(...).get_meta_policy()`).
         """
-        if outer_steps is not None:
-            if self.verbose >=1:
-                print(
-                    f"[BaseMetaRL] Overriding class outer_steps ({self.outer_steps}) "
-                    f"with new value for this run: {outer_steps}."
-                )
-            self.outer_steps = outer_steps # add possibility to resume training
-            
-        if reset_task_history_before_learning:
-            self.task_generator.reset_history()
-
-        if task_seed_mode not in ("generator", "meta_step"):
-            raise ValueError(
-                f"Unknown task_seed_mode={task_seed_mode!r}. "
-                "Expected 'generator' or 'meta_step'."
-            )
-
-        if self.verbose >= 1:
-            print(f"[BaseMetaRL] Task seed mode: {task_seed_mode}.")
-            if log_inner_tasks:
-                print(
-                    f"[BaseMetaRL] Inner-loop task logging enabled "
-                    f"(inner_tb_log_root={inner_tb_log_root})."
-                )
-        if save_freq < 0:
-            raise ValueError(f"`save_freq` must be >= 0, got {save_freq}.")
-
-        checkpoint_dir = save_path or "./checkpoints"
-        checkpoint_run_dir = None
-        if save_freq > 0 or save_final:
-            os.makedirs(checkpoint_dir, exist_ok=True)
-            checkpoint_run_dir = self._build_checkpoint_run_dir(
-                base_path=checkpoint_dir,
-                tb_log_name=tb_log_name,
-            )
-            if self.verbose >= 1:
-                print(f"[BaseMetaRL] Checkpoints for this run: {checkpoint_run_dir}")
-
-        base_run_name = tb_log_name or self.__class__.__name__
-        safe_run_name = sanitize_name(base_run_name)
-        run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_stem = f"{safe_run_name}_{run_timestamp}"
-
-        inner_run_root = None
-        if log_inner_tasks:
-            inner_root_base = inner_tb_log_root or "./inner-logs"
-            inner_run_root = os.path.join(inner_root_base, run_stem)
-            os.makedirs(inner_run_root, exist_ok=True)
-            if self.verbose >= 1:
-                print(f"[BaseMetaRL] Inner-loop TensorBoard root: {inner_run_root}")
-
-        if self.tensorboard_logs is not None:
-            if self.meta_logger is not None:
-                self.meta_logger.close()
-                self.meta_logger = None
-            self._init_tensorboard_writer(
-                tb_log_name=run_stem,
-                reset_num_timesteps=True,
-            )
+        setup = self._setup_learn(
+            outer_steps=outer_steps,
+            reset_task_history_before_learning=reset_task_history_before_learning,
+            task_seed_mode=task_seed_mode,
+            tb_log_name=tb_log_name,
+            log_inner_tasks=log_inner_tasks,
+            inner_tb_log_root=inner_tb_log_root,
+            save_freq=save_freq,
+            save_path=save_path,
+            save_final=save_final,
+        )
+        task_seed_mode = setup["task_seed_mode"]
+        log_inner_tasks = setup["log_inner_tasks"]
+        inner_run_root = setup["inner_run_root"]
+        checkpoint_run_dir = setup["checkpoint_run_dir"]
 
         last_saved_outer = 0
         try:
