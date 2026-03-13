@@ -18,12 +18,11 @@ from stable_baselines3.common.logger import Logger
 from stable_baselines3.common.utils import get_device, configure_logger
 
 from .task_generator import TaskGenerator
-from .utils import load_weights_from_source, compute_updates, to_json_safe
+from .utils import load_weights_from_source, compute_updates, to_json_safe, sanitize_name
 from .utils import LRSchedule, normalize_lr_schedule
 
-#TODO: implement the save_frequency logic to save multiple checkpoints of the meta-model
-
 #TODO: implement a setup_learn function a-la sb3 to clean the .learn() function
+#TODO: add a testing rollout loop inside the .learn to tracl progress of meta-model + log
 
 class BaseMetaAlgorithm(ABC):
     """
@@ -55,7 +54,6 @@ class BaseMetaAlgorithm(ABC):
         inner_loop_params: Optional[Dict[str, Any]] = None,
         ignored_layers: Optional[List[str]] = None,
         ignore_optimizer_params: bool = False,
-        # save_frequency: int = 1,
         verbose: int = 0,
         device: th.device | str = "auto",
         tensorboard_logs: Optional[str] = './meta-logs',
@@ -395,6 +393,30 @@ class BaseMetaAlgorithm(ABC):
         """
         task_model.learn(self.inner_steps, **self.inner_loop_params)
 
+    def _inner_adapt_with_optional_logging(
+        self,
+        task_model: Any,
+        *,
+        inner_tb_log_name: Optional[str],
+        inner_tb_log_root: Optional[str],
+    ) -> None:
+        """
+        Run inner adaptation and, when possible, attach SB3-style tensorboard
+        naming per task.
+        """
+        if inner_tb_log_name is None:
+            self.inner_adapt(task_model)
+            return
+
+        if inner_tb_log_root is not None and hasattr(task_model, "tensorboard_log"):
+            setattr(task_model, "tensorboard_log", inner_tb_log_root)
+
+        learn_kwargs = dict(self.inner_loop_params)
+        learn_kwargs.setdefault("tb_log_name", inner_tb_log_name)
+        learn_kwargs.setdefault("reset_num_timesteps", False)
+        
+        task_model.learn(self.inner_steps, **learn_kwargs)
+
     @abstractmethod
     def meta_update(self, task_models: List[Any], outer_step: int) -> None:
         """
@@ -412,6 +434,8 @@ class BaseMetaAlgorithm(ABC):
         reset_task_history_before_learning: bool = True,
         task_seed_mode: Literal["generator", "meta_step"] = "generator",
         tb_log_name: Optional[str] = None,
+        log_inner_tasks: bool = False,
+        inner_tb_log_root: Optional[str] = None,
         save_freq: int = 0,
         save_path: Optional[str] = None,
         save_prefix: str = "meta_ckpt",
@@ -433,6 +457,10 @@ class BaseMetaAlgorithm(ABC):
               - "meta_step": each sampled task uses seed=meta_step_index (for strict 
                             reproducibility purposes).
             tb_log_name: Optional TensorBoard run name. If None, defaults to class name.
+            log_inner_tasks: If True, logs each inner-loop task with a dedicated
+                SB3 tb_log_name (when supported by the inner learner).
+            inner_tb_log_root: Optional tensorboard root directory for inner-loop
+                task logs (SB3 models only).
             save_freq: Save checkpoint every `save_freq` outer steps. 0 disables periodic saves.
             save_path: Directory where checkpoints are saved. Defaults to "./checkpoints".
             save_prefix: Prefix used for checkpoint filenames.
@@ -444,8 +472,8 @@ class BaseMetaAlgorithm(ABC):
         if outer_steps is not None:
             if self.verbose >=1:
                 print(
-                    f"[BaseMetaRL] Overriding initial outer_steps ({self.outer_steps}) "
-                    f"with new value: {outer_steps}."
+                    f"[BaseMetaRL] Overriding class outer_steps ({self.outer_steps}) "
+                    f"with new value for this run: {outer_steps}."
                 )
             self.outer_steps = outer_steps # add possibility to resume training
             
@@ -460,6 +488,11 @@ class BaseMetaAlgorithm(ABC):
 
         if self.verbose >= 1:
             print(f"[BaseMetaRL] Task seed mode: {task_seed_mode}.")
+            if log_inner_tasks:
+                print(
+                    f"[BaseMetaRL] Inner-loop task logging enabled "
+                    f"(inner_tb_log_root={inner_tb_log_root})."
+                )
         if save_freq < 0:
             raise ValueError(f"`save_freq` must be >= 0, got {save_freq}.")
 
@@ -474,12 +507,25 @@ class BaseMetaAlgorithm(ABC):
             if self.verbose >= 1:
                 print(f"[BaseMetaRL] Checkpoints for this run: {checkpoint_run_dir}")
 
+        base_run_name = tb_log_name or self.__class__.__name__
+        safe_run_name = sanitize_name(base_run_name)
+        run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_stem = f"{safe_run_name}_{run_timestamp}"
+
+        inner_run_root = None
+        if log_inner_tasks:
+            inner_root_base = inner_tb_log_root or "./inner-logs"
+            inner_run_root = os.path.join(inner_root_base, run_stem)
+            os.makedirs(inner_run_root, exist_ok=True)
+            if self.verbose >= 1:
+                print(f"[BaseMetaRL] Inner-loop TensorBoard root: {inner_run_root}")
+
         if self.tensorboard_logs is not None:
             if self.meta_logger is not None:
                 self.meta_logger.close()
                 self.meta_logger = None
             self._init_tensorboard_writer(
-                tb_log_name=tb_log_name,
+                tb_log_name=run_stem,
                 reset_num_timesteps=True,
             )
 
@@ -498,11 +544,20 @@ class BaseMetaAlgorithm(ABC):
                         task_batch.append(self.task_generator.get_task(task_meta_step))
 
                 inner_start = time.perf_counter()
-                for env, task_info, first_occurrence in task_batch:
+                for task_idx, (env, task_info, first_occurrence) in enumerate(task_batch):
                     task_model = self.instantiate_model(env)
                     self.copy_meta_to_task(task_model)
-
-                    self.inner_adapt(task_model)
+                    task_meta_step = outer * self.task_batch_size + task_idx
+                    inner_task_run_name = None
+                    if log_inner_tasks:
+                        inner_task_run_name = (
+                            f"inner_outer_{outer + 1}_task_{task_idx + 1}_meta_{task_meta_step}"
+                        )
+                    self._inner_adapt_with_optional_logging(
+                        task_model,
+                        inner_tb_log_name=inner_task_run_name,
+                        inner_tb_log_root=inner_run_root,
+                    )
                     task_models.append(task_model)
                 inner_total_seconds = time.perf_counter() - inner_start
 

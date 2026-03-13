@@ -13,7 +13,6 @@ tmp/
 examples/checkpoints/
 examples/logs/
 examples/meta-logs/
-examples/meta_reptile_cartpole.zip
 examples/model_instantiation_training_example.ipynb
 
 src/fomaml.py

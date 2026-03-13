@@ -83,6 +83,9 @@ def to_json_safe(value: Any) -> Any:
         return [to_json_safe(v) for v in value]
     return repr(value)
 
+def sanitize_name(name: str) -> str:
+        return "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in name)
+
 def load_weights_from_source(
     source: Union[Module, Dict[str, torch.Tensor]],
     target_model: Module,
