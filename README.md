@@ -1,4 +1,4 @@
-# Reptile_sb3
+# Reptile SB3
 
 <img src="figs/meta_sb3_logo.png" align="right" width="200" />
 
@@ -18,6 +18,17 @@ It is designed for:
 - Meta-RL experiments where each outer iteration samples tasks and adapts an inner learner per task.
 - First-order approximation methods (no second-order Hessian terms), with a current focus on Reptile-style updates.
 - Fast prototyping by reusing SB3 training code in the inner loop instead of rewriting RL algorithms.
+
+
+<p align="center">
+  <img src="figs/meta-rl-generic_white.png" alt="My Image" width="400">
+</p>
+
+For detailed information on meta-RL we redirect to:
+- [A Tutorial on Meta-Reinforcement
+Learning in *Foundations and Trends in Machine Learning*](https://arxiv.org/pdf/2301.08028)
+- [Lil'Log blog's](https://lilianweng.github.io/posts/2019-06-23-meta-rl/)
+
 
 ## Core idea
 
