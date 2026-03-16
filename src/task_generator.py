@@ -9,9 +9,10 @@ ListTask = List[Tuple[gym.Env, Dict[str, Any]]]
 
 # TODO: decaying revisits
 
-#TODO: add a parameter in get_task to specify wether to save the task in history or train/test modes
-# or different task_generators but make sure there are strictyl the same so that the seeding is the same so we can use the 
-# meta-step logoc.
+#TODO: find  way to store the tasks for the predefined_list (maybe store indices instead of seed),
+# i want something that is consistent with what we store when using the task callable
+
+#TODO: should the sampling and revisit method be the same ? or should we add a parameter for the revisit
 
 def accepts_named_arg(func, name: str) -> bool:
     return name in inspect.signature(func).parameters
@@ -96,6 +97,7 @@ class TaskGenerator:
         self,
         meta_step: int,
         seed: Optional[int] = None,
+        history: bool = True,
     ) -> Tuple[gym.Env, Dict[str, Any], Optional[int]]:
         """
         Generate or retrieve a task.
@@ -109,7 +111,7 @@ class TaskGenerator:
         """
         if self.tasks is not None:
             return self._get_task_from_predefined_list(meta_step)
-        return self._get_task_from_callable(meta_step, seed=seed)
+        return self._get_task_from_callable(meta_step, seed=seed, history=history)
 
     def _get_task_from_predefined_list(
         self,
@@ -137,6 +139,7 @@ class TaskGenerator:
         self,
         meta_step: int,
         seed: Optional[int] = None,
+        history: bool = True,
     ) -> Tuple[gym.Env, Dict[str, Any], Optional[int]]:
         if self.task_callable is None:
             raise ValueError("`task_callable` must be provided for callable-based task generation.")
@@ -159,14 +162,15 @@ class TaskGenerator:
 
         env, info = self.task_callable(random_seed=seed, **self.task_callable_params)
 
-        self.selected_tasks.append(
-            {
-                "seed": seed,
-                "first_meta_step": meta_step,
-                "meta_steps": [meta_step],
-                "task_info": info,
-            }
-        )
+        if history:
+            self.selected_tasks.append(
+                {
+                    "seed": seed,
+                    "first_meta_step": meta_step,
+                    "meta_steps": [meta_step],
+                    "task_info": info,
+                }
+            )
         return env, info, meta_step
 
     def _select_task_index_for_revisit(self) -> int:
